@@ -20,8 +20,14 @@ from satay.api.primitives import start
 from satay.journal.store import SQLiteStore
 
 from cuttlefish import runtime
-from cuttlefish.episodic.events import DelegationFailed, TaskFailed, TaskSubmitted
+from cuttlefish.episodic.events import (
+    DelegationFailed,
+    HandoverWritten,
+    TaskFailed,
+    TaskSubmitted,
+)
 from cuttlefish.episodic.store import EpisodicStore
+from cuttlefish.llm.provider import LlmResponse
 from cuttlefish.llm.replay import ReplayLlmProvider
 from cuttlefish.workflow import run_task
 
@@ -70,6 +76,74 @@ async def test_a_refused_delegation_is_a_journaled_failure(
     assert events[0].payload.text == "add a .gitignore entry"
     assert isinstance(events[1].payload, DelegationFailed)
     assert isinstance(events[2].payload, TaskFailed)
+
+    episodic_store.close()
+    satay_store.close()
+
+
+@pytest.mark.requires_kopicode
+async def test_handover_fires_and_is_readable_from_the_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """docs/SLICES.md V1 integration test: the handover fires at the configured
+    threshold and the resulting summary event is itself readable from the journal.
+    """
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    episodic_store = EpisodicStore.open(tmp_path / "episodic.db")
+    runtime.configure(
+        runtime.Runtime(
+            episodic_store=episodic_store,
+            llm_provider=ReplayLlmProvider(
+                [
+                    LlmResponse(model="replay", text="handover after submission"),
+                    LlmResponse(model="replay", text="handover after delegation failure"),
+                ]
+            ),
+            kopicode_binary="kopicode",
+        )
+    )
+    satay_store = SQLiteStore.open(":memory:")
+    task_id = "test-task-2"
+    root = tmp_path / "scratch"
+    root.mkdir()
+
+    handle = start(
+        run_task,
+        {
+            "task_id": task_id,
+            "text": "add a .gitignore entry",
+            "root": str(root),
+            # Forces every non-empty window to trigger a handover, deterministically,
+            # rather than growing a real episodic window past a realistic budget.
+            "token_budget": 1,
+        },
+        run_id=task_id,
+        store=satay_store,
+    )
+    await handle.result()
+
+    events = list(episodic_store.read(task_id))
+    kinds = [type(event.payload).__name__ for event in events]
+    assert kinds == [
+        "TaskSubmitted",
+        "HandoverWritten",
+        "DelegationFailed",
+        "HandoverWritten",
+        "TaskFailed",
+    ]
+    first_handover = events[1].payload
+    assert isinstance(first_handover, HandoverWritten)
+    assert first_handover.summary == "handover after submission"
+    assert first_handover.covers_seq_from == 1
+    assert first_handover.covers_seq_to == 1
+
+    second_handover = events[3].payload
+    assert isinstance(second_handover, HandoverWritten)
+    assert second_handover.summary == "handover after delegation failure"
+    assert second_handover.covers_seq_from == 3
+    assert second_handover.covers_seq_to == 3
 
     episodic_store.close()
     satay_store.close()

@@ -10,7 +10,7 @@ derived from exactly these events, never a second transcript (ADR-0004).
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 import satay
 
@@ -23,6 +23,7 @@ from cuttlefish.episodic.events import (
     TaskFailed,
     TaskSubmitted,
 )
+from cuttlefish.handover import DEFAULT_TOKEN_BUDGET, maybe_handover
 from cuttlefish.tasks.delegate import delegate_to_kopicode
 from cuttlefish.tasks.journal import journal
 
@@ -35,11 +36,16 @@ class TaskInput(TypedDict):
     run id). A workflow body has no other durable way to learn its own run id from
     the inside, so the caller mints one id and uses it both places rather than the
     workflow trying to introspect it — see ``cuttlefish.cli`` for where it's minted.
+
+    ``token_budget`` is optional and defaults to ``handover.DEFAULT_TOKEN_BUDGET``
+    — a test lowers it to force a handover deterministically rather than growing a
+    real episodic window large enough to cross a realistic one.
     """
 
     task_id: str
     text: str
     root: str
+    token_budget: NotRequired[int]
 
 
 @satay.workflow
@@ -47,8 +53,10 @@ async def run_task(task_input: TaskInput) -> dict[str, Any]:
     task_id = task_input["task_id"]
     text = task_input["text"]
     root = task_input["root"]
+    token_budget = task_input.get("token_budget", DEFAULT_TOKEN_BUDGET)
 
     await journal(task_id, TaskSubmitted(text=text))
+    await maybe_handover(task_id, token_budget=token_budget)
 
     try:
         outcome = await delegate_to_kopicode(text, root)
@@ -61,6 +69,7 @@ async def run_task(task_input: TaskInput) -> dict[str, Any]:
         # satay wrapper around it.
         reason = str(exc)
         await journal(task_id, DelegationFailed(reason=reason))
+        await maybe_handover(task_id, token_budget=token_budget)
         await journal(task_id, TaskFailed(error=reason))
         return {"status": "failed", "error": reason}
 
@@ -69,6 +78,7 @@ async def run_task(task_input: TaskInput) -> dict[str, Any]:
             task_id,
             DelegationCompleted(summary=outcome.summary, edited_paths=outcome.edited_paths),
         )
+        await maybe_handover(task_id, token_budget=token_budget)
         await journal(task_id, TaskCompleted(result=outcome.summary))
         return {
             "status": "completed",
@@ -81,5 +91,6 @@ async def run_task(task_input: TaskInput) -> dict[str, Any]:
         await journal(task_id, DelegationRefused(reason=reason))
     else:
         await journal(task_id, DelegationFailed(reason=reason))
+    await maybe_handover(task_id, token_budget=token_budget)
     await journal(task_id, TaskFailed(error=reason))
     return {"status": "failed", "error": reason}

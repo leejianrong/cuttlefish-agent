@@ -35,3 +35,23 @@ async def journal(task_id: str, payload: EventPayload) -> None:
     """Encode `payload` and append it via the durable task. Call from a workflow body."""
     event_type, data = encode_payload(payload)
     await append_episodic_event(task_id, event_type, data)
+
+
+@satay.task()
+async def read_episodic_events(task_id: str) -> list[dict[str, Any]]:
+    """Every event for `task_id`, in seq order, as plain encoded dicts.
+
+    A read, not a write, so it needs no ``side_effect``/idempotency handling — a
+    retry of a pure read is always safe. It's still a ``@satay.task`` rather than a
+    direct call from a workflow body: the working-memory handover
+    (``cuttlefish.handover``) branches on what this returns (whether to summarise,
+    and what window to summarise), and a workflow branching on something it didn't
+    durably record is exactly the nondeterminism ADR-0001 requires every durable
+    call to avoid.
+    """
+    store = runtime.current().episodic_store
+    result: list[dict[str, Any]] = []
+    for event in store.read(task_id):
+        event_type, data = encode_payload(event.payload)
+        result.append({"seq": event.seq, "event_type": event_type, "data": data})
+    return result
