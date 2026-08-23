@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# cuttlefish pre-push hook — mirrors the gates CI actually requires.
+#
+# Every step delegates to a `make` target rather than re-spelling its command, so
+# the hook cannot drift from `make ci` or from the workflows.
+#
+# Bypass with:  git push --no-verify
+set -euo pipefail
+
+echo "[pre-push] make check    — ruff, ruff format, mypy --strict"
+make check
+
+echo "[pre-push] make test-all — full suite: unit + integration + e2e"
+make test-all
+
+# Secret scanning is a required CI check, but it needs a gitleaks binary this repo
+# does not vendor. Run it when it is there; never fail a push over the tool being
+# absent, because CI's Security workflow scans full history either way.
+if command -v gitleaks >/dev/null 2>&1; then
+	echo "[pre-push] gitleaks — full history + working tree"
+	gitleaks git --no-banner --redact --verbose .
+	gitleaks dir --no-banner --redact --verbose .
+else
+	echo "[pre-push] SKIP gitleaks — not on PATH (see https://github.com/gitleaks/gitleaks/releases)"
+fi
+
+echo "[pre-push] OK"

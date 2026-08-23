@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# One in-flight run per ref; new pushes cancel the previous run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: ruff check
+        run: uv run ruff check .
+      - name: ruff format --check
+        run: uv run ruff format --check .
+
+  type:
+    name: Type-check (mypy --strict)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: mypy --strict
+        run: uv run mypy src
+
+  test:
+    name: Unit tests (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --frozen
+      # The kopicode delegation's integration tests are exercised against kopicode's
+      # own headless surface directly (docs/PLAN.md "Testing approach"), never a mock.
+      # `kopicode` is not on this runner, so those tests skip themselves rather than
+      # fail — this job keeps the "Unit tests" name for the branch-protection
+      # required-check contract, but runs the full local-only suite (unit + any
+      # integration/e2e test that does not need the kopicode binary).
+      - name: pytest (full suite, kopicode-dependent tests self-skip)
+        run: uv run pytest -q
+
+  kopicode-integration:
+    name: Delegation integration (real kopicode)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          enable-cache: true
+      - name: Check out kopicode (main)
+        run: git clone --depth 1 https://github.com/leejianrong/kopicode.git /tmp/kopicode
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: /tmp/kopicode/go.mod
+      - name: Build kopicode
+        run: |
+          set -euo pipefail
+          cd /tmp/kopicode
+          go build -o /usr/local/bin/kopicode ./cmd/kopicode
+          kopicode --version || true
+      - run: uv sync --frozen
+      - name: pytest (integration only, real kopicode on PATH)
+        run: uv run pytest tests/integration -q

@@ -1,0 +1,111 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cuttlefish"
+version = "0.1.0"
+description = "A long-running, unattended task assistant, built on satay-runtime for durability and delegating coding subtasks to kopicode."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Jian", email = "leejianrong2@gmail.com" }]
+keywords = [
+    "agent",
+    "durable-execution",
+    "unattended",
+    "coding-assistant",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Typing :: Typed",
+]
+# satay is the only runtime dependency slice 1 needs (ADR-0001). Pinned, not
+# floated (docs/QUESTIONS.md Q19) — this project tracks a specific satay
+# release deliberately, since it's satay's first real external consumer and a
+# floating dependency would make "which satay version did this behave against"
+# an open question on every bug report.
+dependencies = [
+    "satay==0.1.0",
+]
+
+[project.scripts]
+cuttlefish = "cuttlefish.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/leejianrong/cuttlefish-agent"
+Repository = "https://github.com/leejianrong/cuttlefish-agent"
+
+# uv dev dependency group (PEP 735); installed by default on `uv sync`.
+[dependency-groups]
+dev = [
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cuttlefish"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/cuttlefish", "README.md", "LICENSE"]
+
+# ---------------------------------------------------------------------------
+# Ruff — lint + format, matching satay-runtime's own configuration exactly
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+# Markdown here is hand-written prose (README, ADRs) with deliberate line
+# breaks and table alignment — see satay-runtime's own pyproject.toml for why
+# a Python formatter should not reflow it.
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "SIM",  # flake8-simplify
+    "PTH",  # flake8-use-pathlib
+    "RUF",  # ruff-specific
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+# ---------------------------------------------------------------------------
+# mypy — strict over the whole package
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src/cuttlefish"]
+warn_unused_configs = true
+show_error_codes = true
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.coverage.run]
+source = ["cuttlefish"]
+branch = true
