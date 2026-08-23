@@ -26,13 +26,16 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Application Frameworks",
     "Typing :: Typed",
 ]
-# satay is the only runtime dependency slice 1 needs (ADR-0001). Pinned, not
-# floated (docs/QUESTIONS.md Q19) — this project tracks a specific satay
-# release deliberately, since it's satay's first real external consumer and a
-# floating dependency would make "which satay version did this behave against"
-# an open question on every bug report.
+# satay is pinned, not floated (docs/QUESTIONS.md Q19) — this project tracks a
+# specific satay release deliberately, since it's satay's first real external
+# consumer and a floating dependency would make "which satay version did this
+# behave against" an open question on every bug report. anthropic backs the real
+# LlmProvider (QUESTIONS.md Q11's "claude ... for real use") -- floated, since it's
+# a well-behaved, actively maintained SDK and cuttlefish has no reason to pin its
+# own first external LLM dependency as tightly as its own runtime.
 dependencies = [
     "satay==0.1.0",
+    "anthropic>=0.40",
 ]
 
 [project.scripts]
