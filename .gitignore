@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Environments
+.venv/
+venv/
+
+# Tooling caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# satay's own project-local data dir, and this project's own episodic store (ADR-0004)
+.satay/
+.cuttlefish/
+
+# Agent worktrees land in .claude/worktrees/ and must never be committed.
+.claude/
+
+# Scratch space for throwaway working files.
+scratchpad/
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
