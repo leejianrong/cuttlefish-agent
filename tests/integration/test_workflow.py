@@ -22,6 +22,7 @@ from satay.journal.store import SQLiteStore
 from cuttlefish import runtime
 from cuttlefish.episodic.events import (
     DelegationFailed,
+    DelegationStarted,
     HandoverWritten,
     TaskFailed,
     TaskSubmitted,
@@ -71,11 +72,12 @@ async def test_a_refused_delegation_is_a_journaled_failure(
 
     events = list(episodic_store.read(task_id))
     kinds = [type(event.payload).__name__ for event in events]
-    assert kinds == ["TaskSubmitted", "DelegationFailed", "TaskFailed"]
+    assert kinds == ["TaskSubmitted", "DelegationStarted", "DelegationFailed", "TaskFailed"]
     assert isinstance(events[0].payload, TaskSubmitted)
     assert events[0].payload.text == "add a .gitignore entry"
-    assert isinstance(events[1].payload, DelegationFailed)
-    assert isinstance(events[2].payload, TaskFailed)
+    assert isinstance(events[1].payload, DelegationStarted)
+    assert isinstance(events[2].payload, DelegationFailed)
+    assert isinstance(events[3].payload, TaskFailed)
 
     episodic_store.close()
     satay_store.close()
@@ -129,6 +131,7 @@ async def test_handover_fires_and_is_readable_from_the_journal(
     assert kinds == [
         "TaskSubmitted",
         "HandoverWritten",
+        "DelegationStarted",
         "DelegationFailed",
         "HandoverWritten",
         "TaskFailed",
@@ -139,11 +142,13 @@ async def test_handover_fires_and_is_readable_from_the_journal(
     assert first_handover.covers_seq_from == 1
     assert first_handover.covers_seq_to == 1
 
-    second_handover = events[3].payload
+    # Covers both DelegationStarted (seq 3) and DelegationFailed (seq 4) -- the
+    # whole window since the first handover.
+    second_handover = events[4].payload
     assert isinstance(second_handover, HandoverWritten)
     assert second_handover.summary == "handover after delegation failure"
     assert second_handover.covers_seq_from == 3
-    assert second_handover.covers_seq_to == 3
+    assert second_handover.covers_seq_to == 4
 
     episodic_store.close()
     satay_store.close()

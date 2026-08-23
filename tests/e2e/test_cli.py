@@ -64,10 +64,11 @@ def test_show_renders_the_full_sequence_matching_the_journal(
     lines = capsys.readouterr().out.strip().splitlines()
 
     assert exit_code == cli.EXIT_OK
-    assert len(lines) == 3
+    assert len(lines) == 4
     assert "TaskSubmitted" in lines[0]
-    assert "DelegationFailed" in lines[1]
-    assert "TaskFailed" in lines[2]
+    assert "DelegationStarted" in lines[1]
+    assert "DelegationFailed" in lines[2]
+    assert "TaskFailed" in lines[3]
 
 
 def test_missing_kopicode_binary_is_a_config_error(
