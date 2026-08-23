@@ -28,9 +28,16 @@ on that being true.
 7. Write the crash-recovery test using satay's `FaultInjector`: kill the process
    after a chosen journal event, resume, assert the same terminal state and no
    duplicated delegation call.
-8. Once kopicode board KAN-987 ships, extend the delegation task to use the real
-   policy gate and demonstrate an actual file edit landing through it - this is
-   the part of R2 and R6 that can't be proven before that card lands.
+8. kopicode board KAN-987 has shipped (2026-08-23, kopicode PR #109,
+   `internal/permission.AllowlistPolicy` plus `run --print --policy-file`).
+   Extend the delegation task to write a policy file (a `root` scoped to the
+   task's scratch checkout, an `allow` list built from the configured
+   allowlist) and pass `--policy-file`, demonstrating an actual file edit
+   landing through it - this is the part of R2 and R6 that couldn't be proven
+   before. Note: kopicode ADR-0011 decision 4 asks the invoking orchestrator
+   to provide process/container containment for any policy-gated invocation;
+   slice 1 does this without one, a deliberate, named exception - see
+   ADR-0002's addendum and Q25.
 
 **Demo:** `cuttlefish run "add a .gitignore entry for build artifacts"` against a
 scratch checkout, kill the process mid-run with `kill -9`, run it again, watch it

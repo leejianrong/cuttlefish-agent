@@ -23,16 +23,26 @@ reasoning, not a paragraph reproducing it. kopicode's own agent brief grew to
 over a thousand lines of exactly that duplication before it was cut back down -
 don't repeat that here.
 
-## The one external dependency to check before starting slice 1
+## The one external dependency, and what landed with it
 
-Slice 1's kopicode delegation needs a policy gate that doesn't exist in
-kopicode's codebase yet - only its ADR does
+Slice 1's kopicode delegation needed a policy gate that didn't exist in
+kopicode's codebase - only its ADR did
 ([kopicode ADR-0011](https://github.com/leejianrong/kopicode/blob/main/docs/adr/0011-unattended-invocation-policy-gate.md)).
-It's filed as **kopicode board card KAN-987**. Check its status before assuming
-the delegation task can do anything beyond what kopicode's current, more
-restrictive headless behaviour allows (see
-[ADR-0003](docs/adr/0003-kopicode-delegation-is-a-wrapped-headless-invocation.md)
-and [`docs/SLICES.md`](docs/SLICES.md) V1, step 8).
+It was filed as **kopicode board card KAN-987**, and it shipped on 2026-08-23
+(kopicode PR #109, `internal/permission.AllowlistPolicy` plus a `--policy-file`
+flag on `run --print`), before this repository's own scaffold existed. Step 8
+of [`docs/SLICES.md`](docs/SLICES.md) V1 is no longer gated on an open external
+card.
+
+It shipped with a condition worth knowing before touching the delegation task:
+kopicode ADR-0011 decision 4 requires orchestrator-side process/container
+containment for *any* policy-gated invocation, and names cuttlefish's own
+sandbox as the obligated party, with no carve-out for a single trusted
+operator. cuttlefish's own [ADR-0002](docs/adr/0002-sandbox-stays-internal-slice-1-accepts-the-risk.md)
+defers the sandbox to V2. Slice 1 proceeds anyway, on the same trust-model
+reasoning ADR-0002 already states, and records that exception explicitly in
+ADR-0002's consequences rather than leaving the tension unwritten - see that
+ADR and [`docs/QUESTIONS.md`](docs/QUESTIONS.md) Q25.
 
 ## Workflow conventions
 

@@ -144,10 +144,11 @@ answers "did this behave correctly," rather than which internal function ran.
 
 The kopicode delegation is tested against kopicode's own headless surface directly
 (no mock kopicode), because the contract that matters is what `run --print`
-actually emits, not an assumption about it. Until kopicode board KAN-987 lands, the
-delegation's retry and refusal-handling paths are exercised against kopicode's
-current, more restrictive behaviour; the "successfully edits a file" path is
-exercised once that card ships.
+actually emits, not an assumption about it. Both paths are exercisable now that
+kopicode board KAN-987 has landed: the refusal-handling path against an
+unconfigured `run --print` (still `denyHeadless` by default, unchanged), and the
+"successfully edits a file" path against `run --print --policy-file`, per
+ADR-0002's addendum.
 
 ## Assumed defaults
 
@@ -162,10 +163,14 @@ exercised once that card ships.
 
 ## Open risks
 
-- **kopicode board KAN-987 is a real, external, cross-repository dependency.**
-  Requirements R2 and R6 cannot be demonstrated for anything beyond a read-only
-  task until it lands. Slice 1's build plan is sequenced so everything else is
-  provable independently of it, but the full acceptance criteria are not.
+- **kopicode board KAN-987 landed (2026-08-23, kopicode PR #109)**, sooner than
+  this plan expected. R2 and R6 can now be demonstrated beyond the read-only
+  case. It shipped with a condition this plan didn't anticipate: kopicode
+  ADR-0011 decision 4 asks the invoking orchestrator to provide containment
+  for any policy-gated invocation, naming cuttlefish's own (not-yet-built)
+  sandbox as the obligated party. Slice 1 uses the policy gate anyway, without
+  the sandbox, as a deliberate, named exception on ADR-0002's existing
+  trust-model reasoning - see that ADR's addendum and QUESTIONS.md Q25.
 - **This project is satay-runtime's first real external consumer.** Nobody else in
   this suite has actually depended on satay as a library yet (sibei-flow's own port
   was deferred). Some of what breaks in slice 1 will be gaps in satay's own public
