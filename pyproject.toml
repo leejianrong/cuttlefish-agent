@@ -105,6 +105,9 @@ show_error_codes = true
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-ra"
+markers = [
+    "requires_kopicode: needs a real kopicode binary on PATH; skips itself otherwise",
+]
 
 [tool.coverage.run]
 source = ["cuttlefish"]
