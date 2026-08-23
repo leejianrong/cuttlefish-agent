@@ -15,10 +15,12 @@ from typing import Any, NotRequired, TypedDict
 import satay
 
 from cuttlefish.delegate.kopicode import DelegationError
+from cuttlefish.delegate.policy import DEFAULT_SHELL_ALLOWLIST
 from cuttlefish.episodic.events import (
     DelegationCompleted,
     DelegationFailed,
     DelegationRefused,
+    DelegationStarted,
     TaskCompleted,
     TaskFailed,
     TaskSubmitted,
@@ -57,6 +59,14 @@ async def run_task(task_input: TaskInput) -> dict[str, Any]:
 
     await journal(task_id, TaskSubmitted(text=text))
     await maybe_handover(task_id, token_budget=token_budget)
+
+    # Every delegation now runs behind kopicode's declared-allowlist policy gate
+    # (KAN-987, ADR-0002's addendum) -- this records what was actually declared,
+    # not just what was asked.
+    await journal(
+        task_id,
+        DelegationStarted(task_text=text, root=root, policy_allow=DEFAULT_SHELL_ALLOWLIST),
+    )
 
     try:
         outcome = await delegate_to_kopicode(text, root)

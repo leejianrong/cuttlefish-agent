@@ -49,7 +49,12 @@ from satay.testing.faults import FaultInjector, SimulatedCrash
 
 from cuttlefish import runtime
 from cuttlefish.delegate.kopicode import DelegationOutcome
-from cuttlefish.episodic.events import DelegationFailed, TaskFailed, TaskSubmitted
+from cuttlefish.episodic.events import (
+    DelegationFailed,
+    DelegationStarted,
+    TaskFailed,
+    TaskSubmitted,
+)
 from cuttlefish.episodic.store import EpisodicStore
 from cuttlefish.llm.replay import ReplayLlmProvider
 from cuttlefish.tasks.delegate import delegate_to_kopicode
@@ -195,8 +200,9 @@ async def test_full_workflow_resumes_to_the_same_terminal_state_after_a_crash(
     kinds = [type(event.payload).__name__ for event in events]
     # Exactly one TaskSubmitted -- the interrupted-and-resumed append was reused
     # from the journal, not written a second time.
-    assert kinds == ["TaskSubmitted", "DelegationFailed", "TaskFailed"]
+    assert kinds == ["TaskSubmitted", "DelegationStarted", "DelegationFailed", "TaskFailed"]
     assert isinstance(events[0].payload, TaskSubmitted)
-    assert isinstance(events[1].payload, DelegationFailed)
-    assert isinstance(events[2].payload, TaskFailed)
+    assert isinstance(events[1].payload, DelegationStarted)
+    assert isinstance(events[2].payload, DelegationFailed)
+    assert isinstance(events[3].payload, TaskFailed)
     episodic_store.close()
