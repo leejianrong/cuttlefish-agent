@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from cuttlefish.llm.claude import ClaudeLlmProvider
+from cuttlefish.llm.openrouter import MissingApiKeyError, OpenRouterLlmProvider
 from cuttlefish.llm.provider import LlmProvider, LlmResponse
 from cuttlefish.llm.replay import ExhaustedReplayError, ReplayLlmProvider
 
@@ -11,5 +12,7 @@ __all__ = [
     "ExhaustedReplayError",
     "LlmProvider",
     "LlmResponse",
+    "MissingApiKeyError",
+    "OpenRouterLlmProvider",
     "ReplayLlmProvider",
 ]

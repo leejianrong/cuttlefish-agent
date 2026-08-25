@@ -43,8 +43,10 @@ not this list:
 - **`cuttlefish.handover`** - the working-memory handover: a token-budget
   check, one bounded LLM call over the recent episodic window, written back
   as an episodic event. ADR-0004, `docs/QUESTIONS.md` Q15.
-- **`cuttlefish.llm`** - the `LlmProvider` seam: `ClaudeLlmProvider` for real
-  use, a keyless `ReplayLlmProvider` for tests. `docs/QUESTIONS.md` Q11.
+- **`cuttlefish.llm`** - the `LlmProvider` seam: `OpenRouterLlmProvider` (the
+  default) over OpenRouter's OpenAI-compatible endpoint, `ClaudeLlmProvider`
+  for a direct Anthropic credential, a keyless `ReplayLlmProvider` for tests.
+  `docs/QUESTIONS.md` Q11.
 - **`cuttlefish.cli`** - `cuttlefish run "<task>"` / `cuttlefish show
   <task-id>`. `docs/QUESTIONS.md` Q9.
 
@@ -101,6 +103,12 @@ These follow directly from the ADRs. Hold them without re-litigating them here.
   `kopicode run --print` as it exists. ADR-0003.
 - **Secrets are redacted from the episodic journal at write time**, not read
   time - by the time a value is readable, it's already committable.
+
+## Secrets
+
+- **Never read or open `.env`.** It holds the real `OPENROUTER_API_KEY` for
+  this repo. Refer to `.env.example` instead when you need to know what
+  variables are expected - it's the committed template with no real values.
 
 ## Pointers
 

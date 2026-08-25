@@ -19,12 +19,19 @@ import uuid
 from pathlib import Path
 
 import satay
+from dotenv import load_dotenv
 
 from cuttlefish import runtime
 from cuttlefish.episodic.store import EpisodicStore
 from cuttlefish.handover import DEFAULT_TOKEN_BUDGET
 from cuttlefish.llm.provider import LlmProvider
 from cuttlefish.workflow import run_task
+
+# Loaded once, at import time, not inside main(): main() also runs in-process in
+# tests (never via subprocess - see tests/e2e/test_cli.py's own docstring), and
+# those rely on monkeypatch.delenv clearing a credential for the duration of one
+# test. Reloading .env on every main() call would put it right back.
+load_dotenv()
 
 #: Exit codes (QUESTIONS.md Q9: "a small fixed set").
 EXIT_OK = 0
@@ -35,7 +42,7 @@ EXIT_WORKFLOW_ERROR = 3
 KOPICODE_BIN_ENV = "CUTTLEFISH_KOPICODE_BIN"
 DEFAULT_KOPICODE_BIN = "kopicode"
 LLM_PROVIDER_ENV = "CUTTLEFISH_LLM_PROVIDER"
-DEFAULT_LLM_PROVIDER = "claude"
+DEFAULT_LLM_PROVIDER = "openrouter"
 
 
 class ConfigError(Exception):
@@ -60,9 +67,19 @@ def _resolve_llm_provider() -> LlmProvider:
 
     "replay" is a test/debug escape hatch, not a documented operator choice: it
     answers every call with a fixed, uninformative response so `cuttlefish run`
-    can be smoke-tested with no live credential. A real run wants "claude".
+    can be smoke-tested with no live credential. A real run defaults to
+    "openrouter" — one key over an OpenAI-compatible endpoint reaches many
+    upstream models, rather than locking cuttlefish to a single vendor SDK.
+    "claude" remains available for a direct Anthropic credential.
     """
     choice = os.environ.get(LLM_PROVIDER_ENV, DEFAULT_LLM_PROVIDER)
+    if choice == "openrouter":
+        from cuttlefish.llm.openrouter import MissingApiKeyError, OpenRouterLlmProvider
+
+        try:
+            return OpenRouterLlmProvider()
+        except MissingApiKeyError as exc:
+            raise ConfigError(str(exc)) from exc
     if choice == "claude":
         from cuttlefish.llm.claude import ClaudeLlmProvider
 
@@ -74,7 +91,9 @@ def _resolve_llm_provider() -> LlmProvider:
         return ReplayLlmProvider(
             [LlmResponse(model="replay", text="(no real summary — replay provider)")] * 1000
         )
-    raise ConfigError(f"unknown {LLM_PROVIDER_ENV}={choice!r}; expected 'claude' or 'replay'")
+    raise ConfigError(
+        f"unknown {LLM_PROVIDER_ENV}={choice!r}; expected 'openrouter', 'claude', or 'replay'"
+    )
 
 
 async def _run(args: argparse.Namespace) -> int:

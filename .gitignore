@@ -35,3 +35,5 @@ scratchpad/
 *.swp
 .idea/
 .vscode/
+
+.env

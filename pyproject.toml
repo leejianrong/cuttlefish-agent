@@ -29,13 +29,19 @@ classifiers = [
 # satay is pinned, not floated (docs/QUESTIONS.md Q19) — this project tracks a
 # specific satay release deliberately, since it's satay's first real external
 # consumer and a floating dependency would make "which satay version did this
-# behave against" an open question on every bug report. anthropic backs the real
-# LlmProvider (QUESTIONS.md Q11's "claude ... for real use") -- floated, since it's
-# a well-behaved, actively maintained SDK and cuttlefish has no reason to pin its
-# own first external LLM dependency as tightly as its own runtime.
+# behave against" an open question on every bug report. openai backs the default
+# real LlmProvider, OpenRouterLlmProvider, over OpenRouter's OpenAI-compatible
+# endpoint (QUESTIONS.md Q11's "an OpenAI-compatible endpoint"); anthropic backs
+# ClaudeLlmProvider for a direct Anthropic credential. Both floated, since they're
+# well-behaved, actively maintained SDKs and cuttlefish has no reason to pin its
+# own external LLM dependencies as tightly as its own runtime. python-dotenv
+# loads `.env` at CLI startup so an operator's credential doesn't need to be
+# exported into the shell by hand.
 dependencies = [
     "satay==0.1.0",
     "anthropic>=0.40",
+    "openai>=3.3.1",
+    "python-dotenv>=1.2.3",
 ]
 
 [project.scripts]
