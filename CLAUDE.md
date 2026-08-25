@@ -7,21 +7,51 @@ over its existing headless interface. Python, `uv`, `ruff`, `mypy --strict`,
 `pytest` - the same toolchain conventions as satay-runtime, since this project
 depends on it directly.
 
-## Nothing is built yet
+## Build status
 
-This repository currently holds a plan, not code. Read
-[`docs/PLAN.md`](docs/PLAN.md) first, then [`docs/adr/`](docs/adr/) for why each
-load-bearing decision was made, then [`docs/SLICES.md`](docs/SLICES.md) for the
-build order. `docs/QUESTIONS.md` is the full decision register, including which
-defaults were assumed rather than decided, and what it costs if one turns out to
-be wrong.
+**Trust the code over the docs.** `docs/` describes the intended system; where
+the two disagree, the code is the truth - `ls src/cuttlefish/`, `git log
+--oneline`, and a module's own doc comment all beat a paragraph here. Read
+[`docs/PLAN.md`](docs/PLAN.md) first for the problem and shape, then
+[`docs/adr/`](docs/adr/) for why each load-bearing decision was made, then
+[`docs/SLICES.md`](docs/SLICES.md) for the build order this was built against.
+`docs/QUESTIONS.md` is the full decision register.
 
-Once code exists, this section becomes a build-status summary the way kopicode's
-own `CLAUDE.md` has one. Keep it lean when that happens: one to three lines per
-package, pointing at the package's own doc comment and the relevant ADR for the
-reasoning, not a paragraph reproducing it. kopicode's own agent brief grew to
-over a thousand lines of exactly that duplication before it was cut back down -
-don't repeat that here.
+**Slice 1 is complete**: all 8 build-plan steps in `docs/SLICES.md` V1 have
+landed and merged, each behind its own PR - `make ci` is green on `main`
+(lint, `mypy --strict`, the full unit/integration/e2e suite). Progress is
+tracked on the `cuttlefish-agent` Pandan board (epics `V1` and `V2`). What
+remains open: a live end-to-end demonstration of a real file edit landing
+through the policy gate needs a working model credential, which isn't always
+available - everything else about R1/R2/R6 is proven by real, unmocked
+automated tests already (KAN-1008 tracks that last piece).
+
+What each module is, in one or two lines - read its own doc comment for why,
+not this list:
+
+- **`cuttlefish.episodic`** - the tagged-union event log,
+  `.cuttlefish/episodic.db` (SQLite), never a table inside satay's own
+  `.satay/`. A redactor strips known secret values at append time; an
+  unrecognised event type round-trips verbatim instead of being dropped.
+  ADR-0004.
+- **`cuttlefish.workflow`** - `run_task`, the `@satay.workflow` core loop:
+  one task per LLM call, one for the kopicode delegation. ADR-0001.
+- **`cuttlefish.delegate`** - shells out to `kopicode run --print`, parses
+  its NDJSON stream into one `DelegationOutcome`, writes and passes the
+  declared-allowlist policy file KAN-987 added. ADR-0003, and the "one
+  external dependency" section below.
+- **`cuttlefish.handover`** - the working-memory handover: a token-budget
+  check, one bounded LLM call over the recent episodic window, written back
+  as an episodic event. ADR-0004, `docs/QUESTIONS.md` Q15.
+- **`cuttlefish.llm`** - the `LlmProvider` seam: `ClaudeLlmProvider` for real
+  use, a keyless `ReplayLlmProvider` for tests. `docs/QUESTIONS.md` Q11.
+- **`cuttlefish.cli`** - `cuttlefish run "<task>"` / `cuttlefish show
+  <task-id>`. `docs/QUESTIONS.md` Q9.
+
+Toolchain: Python 3.12/3.13, `uv`, `ruff`, `mypy --strict`, `pytest` split
+into unit/integration/e2e. `make ci` runs the full local-only suite; CI adds
+a job that builds kopicode from source so the delegation's integration tests
+run against the real binary, not a mock.
 
 ## The one external dependency, and what landed with it
 
@@ -46,10 +76,11 @@ ADR and [`docs/QUESTIONS.md`](docs/QUESTIONS.md) Q25.
 
 ## Workflow conventions
 
-- `main` is protected once there's something worth protecting - PR-only, never
-  push straight to `main` after the initial scaffold lands.
-- Branch per slice: `git switch -c feat/<slice>` off `origin/main`, then open a
-  PR.
+- `main` is PR-only now that there's something worth protecting - the initial
+  scaffold was the one thing allowed to land directly. Never push straight to
+  `main` after that.
+- Branch per slice part: `git switch -c feat/<slice>-<part>` off `origin/main`,
+  then open a PR. `make ci` green before merging.
 - Commit trailer: `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>`.
 
 ## Boundaries that must not be crossed
@@ -79,3 +110,5 @@ These follow directly from the ADRs. Hold them without re-litigating them here.
 - [`docs/QUESTIONS.md`](docs/QUESTIONS.md) - every decision, who made it, and
   where it landed
 - [`README.md`](README.md) - what this is, for a human reading the repo cold
+- Pandan board `cuttlefish-agent` (board key `CUT`) - build-plan progress as
+  epics/stories; `KAN-1001` through `KAN-1008` are slice 1

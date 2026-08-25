@@ -13,11 +13,28 @@ disagree with each other.
 
 ## Status
 
-Nothing runs yet. This repository currently holds the plan: [`docs/PLAN.md`](docs/PLAN.md),
+Slice 1 is built: a real `cuttlefish run "<task>"` delegates to a real kopicode,
+behind its real declared-allowlist policy gate, journaled to a real episodic
+record, surviving a real killed-and-resumed process. See
+[`CLAUDE.md`](CLAUDE.md)'s build-status section for what's done, what each
+module is, and the one piece (a live end-to-end run against a working model
+credential) still open. The plan that got it there: [`docs/PLAN.md`](docs/PLAN.md),
 four architectural decisions in [`docs/adr/`](docs/adr/), the build order in
 [`docs/SLICES.md`](docs/SLICES.md), and the full decision register in
-[`docs/QUESTIONS.md`](docs/QUESTIONS.md). Slice 1's acceptance criteria are stated
-there and haven't been met yet.
+[`docs/QUESTIONS.md`](docs/QUESTIONS.md).
+
+## Usage
+
+```bash
+uv sync
+uv run cuttlefish run "add a .gitignore entry for build artifacts"
+uv run cuttlefish show <task-id>   # printed by `run`, above
+```
+
+`run` needs a `kopicode` binary on `PATH` (checked before anything else - a
+missing one is a config error, not a mid-task failure) and, for a real
+provider, `ANTHROPIC_API_KEY` set. `CUTTLEFISH_LLM_PROVIDER=replay` swaps in a
+keyless, deterministic provider for smoke-testing the CLI itself.
 
 ## Why this exists
 
