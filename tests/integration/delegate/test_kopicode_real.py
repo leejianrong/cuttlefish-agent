@@ -5,9 +5,9 @@ missing provider API key is itself one of kopicode's real, documented headless
 outcomes (`ErrNoAPIKey`, empty stdout, stderr explains why, exit 4) and it's a
 genuinely unmocked round trip through the real binary, the real subprocess
 plumbing, and cuttlefish's own NDJSON parser. A scenario that needs kopicode to
-actually reach a model and get denied or complete a real edit needs a live
-provider credential and is out of scope for this suite — see
-tests/integration/delegate/test_kopicode_live.py once that's written.
+actually reach a model and complete a real edit needs a live provider
+credential and is out of scope for this suite — see
+tests/integration/delegate/test_kopicode_live.py.
 """
 
 from __future__ import annotations
