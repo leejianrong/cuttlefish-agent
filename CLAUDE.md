@@ -17,14 +17,17 @@ the two disagree, the code is the truth - `ls src/cuttlefish/`, `git log
 [`docs/SLICES.md`](docs/SLICES.md) for the build order this was built against.
 `docs/QUESTIONS.md` is the full decision register.
 
-**Slice 1 is complete**: all 8 build-plan steps in `docs/SLICES.md` V1 have
-landed and merged, each behind its own PR - `make ci` is green on `main`
-(lint, `mypy --strict`, the full unit/integration/e2e suite). Progress is
-tracked on the `cuttlefish-agent` Pandan board (epics `V1` and `V2`). What
-remains open: a live end-to-end demonstration of a real file edit landing
-through the policy gate needs a working model credential, which isn't always
-available - everything else about R1/R2/R6 is proven by real, unmocked
-automated tests already (KAN-1008 tracks that last piece).
+**Slice 1 is complete, including the live end-to-end demonstration**: all 8
+build-plan steps in `docs/SLICES.md` V1 have landed and merged, each behind
+its own PR - `make ci` is green on `main` (lint, `mypy --strict`, the full
+unit/integration/e2e suite). Progress is tracked on the `cuttlefish-agent`
+Pandan board (epics `V1` and `V2`). KAN-1008 - a real file edit landing
+through the policy gate, with a live model credential - ran against the real
+OpenRouter-backed kopicode binary and closed on 2026-08-26; it also surfaced
+and fixed a real classification bug (`classify_stream` only recognised
+`edit_applied`, missing the `write_file`/`delete_file` tool calls that never
+emit it), so what R1/R2/R6 claim is now proven against the real binary, not
+just asserted from unmocked-but-credential-less tests.
 
 What each module is, in one or two lines - read its own doc comment for why,
 not this list:
