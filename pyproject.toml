@@ -116,6 +116,7 @@ testpaths = ["tests"]
 addopts = "-ra"
 markers = [
     "requires_kopicode: needs a real kopicode binary on PATH; skips itself otherwise",
+    "requires_live_credential: needs a real OPENROUTER_API_KEY or ANTHROPIC_API_KEY; skips itself otherwise",
 ]
 
 [tool.coverage.run]
