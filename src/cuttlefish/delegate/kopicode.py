@@ -15,11 +15,13 @@ from collections.abc import Iterable, Mapping
 from typing import Any, Literal
 
 #: kopicode run --print's per-line `kind` values this module reads. Every other kind
-#: (provider_request, tool_call_parsed, ...) is part of the real record but doesn't
-#: change the outcome this module decides.
+#: (provider_request, ...) is part of the real record but doesn't change the outcome
+#: this module decides.
 _KIND_STREAM = "stream"
 _KIND_PERMISSION_DECIDED = "permission_decided"
 _KIND_EDIT_APPLIED = "edit_applied"
+_KIND_TOOL_CALL_PARSED = "tool_call_parsed"
+_KIND_TOOL_RESULT = "tool_result"
 _KIND_SESSION_ENDED = "session_ended"
 
 #: permission_decided's `decision` field (kopicode internal/permission.Verdict).
@@ -27,6 +29,14 @@ _DECISION_DENY = "deny"
 
 #: session_ended's exit_code: 0 is the only success value (kopicode internal/engine/stop.go).
 _EXIT_CODE_SUCCESS = 0
+
+#: kopicode's write_file and delete_file never emit edit_applied (internal/engine/
+#: dispatch.go: only edit_file and edit_file_fuzzy call journalEdit) — they show up
+#: only as a tool_call_parsed/tool_result pair, so a whole-file create/replace or a
+#: delete would otherwise be invisible to this module and read as "no edit needed"
+#: even though a real write landed. Their tool_call_parsed `detail` is the call's own
+#: JSON arguments, always including `path` (internal/engine/catalogue.go).
+_WHOLE_FILE_WRITE_TOOLS = frozenset({"write_file", "delete_file"})
 
 
 class DelegationError(Exception):
@@ -74,6 +84,12 @@ def classify_stream(events: Iterable[Mapping[str, Any]]) -> DelegationOutcome:
     edited_paths: list[str] = []
     deny_reasons: list[str] = []
     session_ended: Mapping[str, Any] | None = None
+    # A write_file/delete_file tool_call_parsed's path, held until its matching
+    # tool_result confirms it actually ran. FIFO is safe: kopicode dispatches one
+    # call at a time and journals its result before starting the next
+    # (internal/engine/dispatch.go's dispatch loop), so the print stream never
+    # interleaves two calls' events.
+    pending_whole_file_writes: list[str | None] = []
 
     for event in events:
         kind = event.get("kind")
@@ -81,6 +97,16 @@ def classify_stream(events: Iterable[Mapping[str, Any]]) -> DelegationOutcome:
             path = event.get("path")
             if isinstance(path, str) and path:
                 edited_paths.append(path)
+        elif kind == _KIND_TOOL_CALL_PARSED and event.get("tool") in _WHOLE_FILE_WRITE_TOOLS:
+            pending_whole_file_writes.append(_path_from_tool_detail(event.get("detail")))
+        elif kind == _KIND_TOOL_RESULT and event.get("tool") in _WHOLE_FILE_WRITE_TOOLS:
+            if pending_whole_file_writes:
+                path = pending_whole_file_writes.pop(0)
+                # tool_result's `reason` carries journal.ToolResult.ErrorKind and is
+                # omitted entirely when empty (cmd/kopicode/print.go: "zero fields
+                # are omitted") — its presence is what marks this call as failed.
+                if path and not event.get("reason"):
+                    edited_paths.append(path)
         elif kind == _KIND_PERMISSION_DECIDED:
             if event.get("decision") == _DECISION_DENY:
                 reason = event.get("reason")
@@ -170,6 +196,18 @@ async def run_kopicode(
             f"stderr: {stderr_text or '<empty>'}"
         )
     return classify_stream(events)
+
+
+def _path_from_tool_detail(detail: object) -> str | None:
+    """The `path` argument out of a tool_call_parsed's `detail` (its raw call JSON)."""
+    if not isinstance(detail, str):
+        return None
+    try:
+        parsed = json.loads(detail)
+    except json.JSONDecodeError:
+        return None
+    path = parsed.get("path") if isinstance(parsed, dict) else None
+    return path if isinstance(path, str) and path else None
 
 
 def _parse_ndjson(stdout_bytes: bytes) -> list[Mapping[str, Any]]:
