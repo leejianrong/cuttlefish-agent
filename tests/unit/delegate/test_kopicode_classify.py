@@ -83,6 +83,56 @@ def test_a_stream_with_no_session_ended_raises() -> None:
         classify_stream([{"kind": "user_message", "text": "hi"}])
 
 
+def test_a_successful_write_file_call_is_a_completed_edit() -> None:
+    # write_file never emits edit_applied (kopicode's dispatch table only calls
+    # journalEdit for edit_file/edit_file_fuzzy) -- only a tool_call_parsed /
+    # tool_result pair for it.
+    outcome = classify_stream(
+        [
+            {
+                "kind": "tool_call_parsed",
+                "tool": "write_file",
+                "detail": '{"path":"NOTES.md","content":"hello"}',
+            },
+            {"kind": "tool_result", "tool": "write_file"},
+            {"kind": "session_ended", "reason": "completed", "exit_code": 0},
+        ]
+    )
+    assert outcome.kind == "completed"
+    assert outcome.edited_paths == ["NOTES.md"]
+
+
+def test_a_successful_delete_file_call_is_a_completed_edit() -> None:
+    outcome = classify_stream(
+        [
+            {"kind": "tool_call_parsed", "tool": "delete_file", "detail": '{"path":"old.txt"}'},
+            {"kind": "tool_result", "tool": "delete_file"},
+            {"kind": "session_ended", "reason": "completed", "exit_code": 0},
+        ]
+    )
+    assert outcome.kind == "completed"
+    assert outcome.edited_paths == ["old.txt"]
+
+
+def test_a_failed_write_file_call_is_not_credited_as_an_edit() -> None:
+    # A tool_result's `reason` field is only present when journal.ToolResult's
+    # ErrorKind is non-empty (print.go omits zero fields), so its presence marks
+    # this call as having failed rather than landed.
+    outcome = classify_stream(
+        [
+            {
+                "kind": "tool_call_parsed",
+                "tool": "write_file",
+                "detail": '{"path":"NOTES.md","content":"hello"}',
+            },
+            {"kind": "tool_result", "tool": "write_file", "reason": "task"},
+            {"kind": "session_ended", "reason": "completed", "exit_code": 0},
+        ]
+    )
+    assert outcome.kind == "completed"
+    assert outcome.edited_paths == []
+
+
 def test_an_allow_decision_is_not_treated_as_a_denial() -> None:
     outcome = classify_stream(
         [
