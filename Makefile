@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help dev lint type check test test-all ci install-hooks
+.PHONY: help dev lint type check test test-all test-sandbox-live ci install-hooks
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -26,6 +26,14 @@ test: ## Unit tests only — the fast inner-loop target, no infra
 # posture satay-runtime's own studio-gated tests take for a missing extra.
 test-all: ## The FULL suite (unit + integration + e2e)
 	uv run pytest -q
+
+# cuttlefish/sandbox's E2bSandboxProvider is tested against a real E2B account
+# (docs/SLICES.md V2 test plan), the same cost-bearing posture kopicode's own
+# paid `make bench` takes — never in CI, always an explicit, confirmed local run.
+test-sandbox-live: ## create/exec/snapshot/destroy against a real E2B account — COSTS MONEY, never in CI
+	@echo "This spends real E2B account time. Ctrl-C to abort."
+	@read -r -p "continue? [y/N] " a; [ "$$a" = "y" ] || exit 1
+	uv run pytest -m requires_e2b_credential -q
 
 ci: check test-all ## Everything CI gates on (lint + mypy + full suite)
 

@@ -36,12 +36,16 @@ classifiers = [
 # well-behaved, actively maintained SDKs and cuttlefish has no reason to pin its
 # own external LLM dependencies as tightly as its own runtime. python-dotenv
 # loads `.env` at CLI startup so an operator's credential doesn't need to be
-# exported into the shell by hand.
+# exported into the shell by hand. e2b backs E2bSandboxProvider (ADR-0002: the
+# only sandbox backend this project builds), floated for the same reason as
+# anthropic/openai — a well-behaved, actively maintained SDK cuttlefish doesn't
+# own and has no reason to pin as tightly as satay.
 dependencies = [
     "satay==0.1.0",
     "anthropic>=0.40",
     "openai>=3.3.1",
     "python-dotenv>=1.2.3",
+    "e2b>=2.0",
 ]
 
 [project.scripts]
@@ -117,6 +121,7 @@ addopts = "-ra"
 markers = [
     "requires_kopicode: needs a real kopicode binary on PATH; skips itself otherwise",
     "requires_live_credential: needs a real OPENROUTER_API_KEY or ANTHROPIC_API_KEY; skips itself otherwise",
+    "requires_e2b_credential: needs a real E2B_API_KEY, costs real money; skips itself otherwise",
 ]
 
 [tool.coverage.run]
