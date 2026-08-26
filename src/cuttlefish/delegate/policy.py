@@ -1,16 +1,23 @@
 """The declared-allowlist policy file cuttlefish writes for each delegation.
 
 kopicode board KAN-987 landed the policy gate ADR-0003 was written to depend on
-(kopicode ADR-0011). Slice 1 uses it with one hardcoded, narrow policy rather than
-a general, operator-declared mechanism (docs/PLAN.md Scope, QUESTIONS.md Q2):
-confine writes to the delegation's own root, and permit no shell command at all.
-Generalising this into a per-task policy is V2 scope (docs/SLICES.md).
+(kopicode ADR-0011). Slice 1 (docs/PLAN.md Scope, QUESTIONS.md Q2) used it with
+one hardcoded, narrow policy: confine writes to the delegation's own root, and
+permit no shell command at all. `write_policy_file`'s `allow` generalises that
+into an operator-declared, per-task policy (KAN-1011, docs/SLICES.md V2 step 3)
+— `cuttlefish.cli`'s `--allow` and `cuttlefish.workflow`'s `TaskInput.allow` are
+what actually let an operator declare one; this module only renders whatever
+was declared (or V1's original empty default) into kopicode's grammar.
 
-This is also the exact capability ADR-0002's addendum names: a policy-gated
-delegation can now cause a real shell command or file write to happen unattended,
-which it could not before KAN-987 landed (kopicode's unconfigured `denyHeadless`
-refused everything). Slice 1 proceeds without the sandbox that ADR-0011 asks the
-orchestrator to provide, as a deliberate, named exception — see that addendum.
+Declaring a real shell command here, still without the sandbox (V2 step 2,
+KAN-1010) that would confine it, is not a new, unnamed risk: ADR-0002's addendum
+already reasons about exactly this — "a bounded shell command... rather than an
+unconditional refusal" changes what a delegation can do, not who is running it
+or what they're running it against, and the same one-operator, own-task,
+own-repo trust model covers both. What this module does not do is validate that
+a declared command is *sensible* — an operator who declares `rm -rf /` gets
+kopicode's permission gate honouring exactly that, the same trust this whole
+policy mechanism already rests on.
 """
 
 from __future__ import annotations
@@ -18,10 +25,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-#: Slice 1's one hardcoded shell allowlist: no shell command may run at all. Real
-#: containment (V2's sandbox, ADR-0002) is what would make a wider allowlist safe
-#: to offer; until then, writes confined to the delegation's own root are the
-#: narrowest capability that still lets kopicode land a real edit.
+#: V1's original default, still the fallback when a call declares no policy of
+#: its own: no shell command may run at all. Confining writes to the
+#: delegation's own root remains the narrowest capability that still lets
+#: kopicode land a real edit unattended.
 DEFAULT_SHELL_ALLOWLIST: list[list[str]] = []
 
 

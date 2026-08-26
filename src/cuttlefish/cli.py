@@ -13,6 +13,7 @@ import argparse
 import asyncio
 import json
 import os
+import shlex
 import shutil
 import sys
 import uuid
@@ -60,6 +61,15 @@ def _check_kopicode_on_path(binary: str) -> None:
             f"kopicode binary {binary!r} is not on PATH. Install kopicode, or set "
             f"{KOPICODE_BIN_ENV} to its path."
         )
+
+
+def _parse_allow(values: list[str] | None) -> list[list[str]]:
+    """Each ``--allow`` value is one allowed command, shell-quoted (e.g. ``"go
+    test"``), split into the argv list kopicode's own declared-allowlist grammar
+    expects (KAN-1011, docs/SLICES.md V2 step 3). No flag at all keeps V1's
+    original default: no shell command allowed.
+    """
+    return [shlex.split(value) for value in values] if values else []
 
 
 def _resolve_llm_provider() -> LlmProvider:
@@ -126,6 +136,7 @@ async def _run(args: argparse.Namespace) -> int:
                     "text": args.task,
                     "root": root,
                     "token_budget": args.token_budget,
+                    "allow": _parse_allow(args.allow),
                 },
                 run_id=task_id,
                 store=store,
@@ -175,6 +186,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_TOKEN_BUDGET,
         help="Working-memory handover threshold, in estimated tokens",
+    )
+    run_parser.add_argument(
+        "--allow",
+        action="append",
+        metavar="CMD",
+        help=(
+            "One shell command the delegation may run inside --root, shell-quoted "
+            "(e.g. --allow 'go test'). Repeatable. Default: no shell command allowed."
+        ),
     )
 
     show_parser = subparsers.add_parser("show", help="Render one task's full episodic record")

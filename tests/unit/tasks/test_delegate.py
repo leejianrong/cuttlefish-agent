@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+import cuttlefish.tasks.delegate
 from cuttlefish import runtime
 from cuttlefish.delegate.kopicode import DelegationError
 from cuttlefish.episodic.store import EpisodicStore
@@ -44,4 +45,33 @@ async def test_the_temporary_policy_file_is_cleaned_up_after_the_call(
 
     files_after = set(tmp_dir.glob("cuttlefish-policy-*"))
     assert files_after == files_before
+    store.close()
+
+
+async def test_a_declared_allowlist_reaches_the_written_policy_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """KAN-1011: `allow` is forwarded to `write_policy_file`, not silently dropped."""
+    store = EpisodicStore.open(tmp_path / "episodic.db")
+    runtime.configure(
+        runtime.Runtime(
+            episodic_store=store,
+            llm_provider=ReplayLlmProvider([]),
+            kopicode_binary="kopicode-binary-that-does-not-exist",
+        )
+    )
+    captured: dict[str, object] = {}
+    original_write_policy_file = cuttlefish.tasks.delegate.write_policy_file
+
+    def spy(path: Path, *, root: str, allow: list[list[str]] | None = None) -> None:
+        captured["allow"] = allow
+        original_write_policy_file(path, root=root, allow=allow)
+
+    monkeypatch.setattr(cuttlefish.tasks.delegate, "write_policy_file", spy)
+
+    declared = [["go", "test"], ["npm", "test"]]
+    with pytest.raises(DelegationError):
+        await delegate_to_kopicode("run the tests", str(tmp_path), allow=declared)
+
+    assert captured["allow"] == declared
     store.close()
