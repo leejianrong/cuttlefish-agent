@@ -20,14 +20,35 @@ the two disagree, the code is the truth - `ls src/cuttlefish/`, `git log
 **Slice 1 is complete, including the live end-to-end demonstration**: all 8
 build-plan steps in `docs/SLICES.md` V1 have landed and merged, each behind
 its own PR - `make ci` is green on `main` (lint, `mypy --strict`, the full
-unit/integration/e2e suite). Progress is tracked on the `cuttlefish-agent`
-Pandan board (epics `V1` and `V2`). KAN-1008 - a real file edit landing
-through the policy gate, with a live model credential - ran against the real
+unit/integration/e2e suite). KAN-1008 - a real file edit landing through the
+policy gate, with a live model credential - ran against the real
 OpenRouter-backed kopicode binary and closed on 2026-08-26; it also surfaced
 and fixed a real classification bug (`classify_stream` only recognised
 `edit_applied`, missing the `write_file`/`delete_file` tool calls that never
 emit it), so what R1/R2/R6 claim is now proven against the real binary, not
 just asserted from unmocked-but-credential-less tests.
+
+**Slice 2 (V2) is complete too**, all 3 backlog stories (KAN-1009/1010/1011)
+closed on 2026-08-26. It started before its own ADR-0002 trigger condition
+fired - see that ADR's 2026-08-26 addenda and `docs/QUESTIONS.md` Q26 for why,
+recorded rather than left implicit. `cuttlefish.sandbox` ended up with two
+backends, not the one V2 was originally scoped for: `E2bSandboxProvider`
+(built, unit-tested, but never exercised against a real account - no
+`E2B_API_KEY` has been available in this build's environment) and
+`ContainerSandboxProvider`, added because kopicode's own ADR-0011 decision 4
+permits "process or **container** containment," not only a microVM (ADR-0002's
+second 2026-08-26 addendum, Q27). The delegation is routed through whichever
+backend is configured (`CUTTLEFISH_SANDBOX=container|e2b|none`, opt-in;
+`none` keeps V1's original direct-host behaviour unchanged) - verified with a
+real edit landing through a real container sandbox and a real credential, the
+same live discipline KAN-1008 held V1 to. Two real gaps only showed up running
+that live, not from reasoning about the design up front: a container doesn't
+inherit the host's environment (kopicode's own credential has to be forwarded
+explicitly), and a bare base image ships no CA bundle, so an outbound HTTPS
+call fails TLS verification unless one is provided - both fixed in
+`cuttlefish.sandbox.container`/`cuttlefish.tasks.delegate`, not left as a
+known gap. Progress is tracked on the `cuttlefish-agent` Pandan board (epics
+`V1` and `V2`), both fully `done`.
 
 What each module is, in one or two lines - read its own doc comment for why,
 not this list:
@@ -43,6 +64,11 @@ not this list:
   its NDJSON stream into one `DelegationOutcome`, writes and passes the
   declared-allowlist policy file KAN-987 added. ADR-0003, and the "one
   external dependency" section below.
+- **`cuttlefish.sandbox`** - the `SandboxProvider` seam (create/exec/snapshot/
+  destroy), `ContainerSandboxProvider` (a local Docker daemon, no account
+  needed) and `E2bSandboxProvider` (built, never yet run against a live
+  account). `cuttlefish.tasks.delegate` routes the kopicode delegation through
+  whichever one is configured, opt-in. ADR-0002, `docs/QUESTIONS.md` Q12/Q27.
 - **`cuttlefish.handover`** - the working-memory handover: a token-budget
   check, one bounded LLM call over the recent episodic window, written back
   as an episodic event. ADR-0004, `docs/QUESTIONS.md` Q15.
@@ -122,4 +148,5 @@ These follow directly from the ADRs. Hold them without re-litigating them here.
   where it landed
 - [`README.md`](README.md) - what this is, for a human reading the repo cold
 - Pandan board `cuttlefish-agent` (board key `CUT`) - build-plan progress as
-  epics/stories; `KAN-1001` through `KAN-1008` are slice 1
+  epics/stories; `KAN-1001` through `KAN-1008` are slice 1 (V1), `KAN-1009`
+  through `KAN-1011` are slice 2 (V2) - both epics fully `done`
