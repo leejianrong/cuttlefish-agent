@@ -6,6 +6,7 @@ own modules for what's built and what's still ahead.
 
 from __future__ import annotations
 
+from cuttlefish.sandbox.container import ContainerSandboxProvider, DockerNotAvailableError
 from cuttlefish.sandbox.e2b import E2bSandboxProvider, MissingApiKeyError
 from cuttlefish.sandbox.provider import (
     ExecResult,
@@ -17,6 +18,8 @@ from cuttlefish.sandbox.provider import (
 )
 
 __all__ = [
+    "ContainerSandboxProvider",
+    "DockerNotAvailableError",
     "E2bSandboxProvider",
     "ExecResult",
     "MissingApiKeyError",
