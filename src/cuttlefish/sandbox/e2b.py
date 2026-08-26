@@ -1,6 +1,8 @@
-"""The E2B-backed ``SandboxProvider`` (ADR-0002) — the only backend this project
-builds, per that ADR's decision not to compete with an already-consolidating
-market of sandbox providers.
+"""The E2B-backed ``SandboxProvider`` (ADR-0002) — this project's first backend,
+per that ADR's decision not to compete with an already-consolidating market of
+sandbox providers. A second, container-backed one joined it once it turned out
+this project had no live E2B account yet to build KAN-1010 against (ADR-0002's
+2026-08-26 addendum, ``cuttlefish.sandbox.container``).
 
 Every method re-``connect``s the handle's id into a live ``e2b.AsyncSandbox``
 before acting on it, rather than holding one open across calls: e2b sandboxes are
@@ -14,7 +16,7 @@ from __future__ import annotations
 import os
 import shlex
 from collections.abc import Sequence
-from typing import Protocol
+from typing import ClassVar, Protocol
 
 from e2b import AsyncSandbox, CommandExitException
 from e2b.exceptions import AuthenticationException, SandboxException
@@ -51,6 +53,8 @@ class _CommandResultLike(Protocol):
 class E2bSandboxProvider:
     """`SandboxProvider` over E2B's `AsyncSandbox` client."""
 
+    BACKEND_NAME: ClassVar[str] = "e2b"
+
     def __init__(self, *, api_key: str | None = None, template: str | None = None) -> None:
         resolved_key = api_key if api_key is not None else os.environ.get(E2B_API_KEY_ENV)
         if not resolved_key:
@@ -60,6 +64,12 @@ class E2bSandboxProvider:
 
     async def create(self, spec: SandboxSpec | None = None) -> SandboxHandle:
         resolved_spec = spec if spec is not None else SandboxSpec()
+        if resolved_spec.mounts:
+            raise SandboxError(
+                "E2bSandboxProvider does not support local bind mounts "
+                "(there is no local filesystem to bind into a remote microVM); "
+                "upload files explicitly instead"
+            )
         try:
             sandbox = await AsyncSandbox.create(
                 template=resolved_spec.template or self._template,

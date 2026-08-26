@@ -26,6 +26,7 @@ from cuttlefish import runtime
 from cuttlefish.episodic.store import EpisodicStore
 from cuttlefish.handover import DEFAULT_TOKEN_BUDGET
 from cuttlefish.llm.provider import LlmProvider
+from cuttlefish.sandbox.provider import SandboxProvider
 from cuttlefish.workflow import run_task
 
 # Loaded once, at import time, not inside main(): main() also runs in-process in
@@ -44,6 +45,8 @@ KOPICODE_BIN_ENV = "CUTTLEFISH_KOPICODE_BIN"
 DEFAULT_KOPICODE_BIN = "kopicode"
 LLM_PROVIDER_ENV = "CUTTLEFISH_LLM_PROVIDER"
 DEFAULT_LLM_PROVIDER = "openrouter"
+SANDBOX_ENV = "CUTTLEFISH_SANDBOX"
+DEFAULT_SANDBOX = "none"
 
 
 class ConfigError(Exception):
@@ -106,11 +109,39 @@ def _resolve_llm_provider() -> LlmProvider:
     )
 
 
+def _resolve_sandbox_provider() -> SandboxProvider | None:
+    """Real containment for the kopicode delegation (docs/SLICES.md V2 step 2,
+    KAN-1010) — opt-in, not the default. "none" (unset) keeps V1's original
+    behaviour: the delegation runs directly against ``--root``, the named
+    exception ADR-0002's addendum already accepts, not silently widened for
+    every operator just because a sandbox package now exists.
+    """
+    choice = os.environ.get(SANDBOX_ENV, DEFAULT_SANDBOX)
+    if choice == "none":
+        return None
+    if choice == "container":
+        from cuttlefish.sandbox.container import ContainerSandboxProvider, DockerNotAvailableError
+
+        try:
+            return ContainerSandboxProvider()
+        except DockerNotAvailableError as exc:
+            raise ConfigError(str(exc)) from exc
+    if choice == "e2b":
+        from cuttlefish.sandbox.e2b import E2bSandboxProvider, MissingApiKeyError
+
+        try:
+            return E2bSandboxProvider()
+        except MissingApiKeyError as exc:
+            raise ConfigError(str(exc)) from exc
+    raise ConfigError(f"unknown {SANDBOX_ENV}={choice!r}; expected 'none', 'container', or 'e2b'")
+
+
 async def _run(args: argparse.Namespace) -> int:
     kopicode_binary = _resolve_kopicode_binary()
     try:
         _check_kopicode_on_path(kopicode_binary)
         llm_provider = _resolve_llm_provider()
+        sandbox_provider = _resolve_sandbox_provider()
     except ConfigError as exc:
         print(f"cuttlefish: {exc}", file=sys.stderr)
         return EXIT_CONFIG_ERROR
@@ -121,6 +152,7 @@ async def _run(args: argparse.Namespace) -> int:
             episodic_store=episodic_store,
             llm_provider=llm_provider,
             kopicode_binary=kopicode_binary,
+            sandbox_provider=sandbox_provider,
         )
     )
 

@@ -14,6 +14,8 @@ import json
 from collections.abc import Iterable, Mapping
 from typing import Any, Literal
 
+from cuttlefish.sandbox.provider import SandboxError, SandboxHandle, SandboxProvider
+
 #: kopicode run --print's per-line `kind` values this module reads. Every other kind
 #: (provider_request, ...) is part of the real record but doesn't change the outcome
 #: this module decides.
@@ -144,6 +146,22 @@ def classify_stream(events: Iterable[Mapping[str, Any]]) -> DelegationOutcome:
     )
 
 
+def build_kopicode_argv(
+    binary: str, task_text: str, *, policy_file: str | None = None
+) -> list[str]:
+    """The argv for one ``binary run --print task_text`` invocation.
+
+    Shared by :func:`run_kopicode` (a direct host subprocess) and
+    :func:`run_kopicode_in_sandbox` (a `SandboxProvider.exec` call) so the two
+    invocation paths can never drift on kopicode's own CLI grammar.
+    """
+    args = [binary, "run", "--print"]
+    if policy_file is not None:
+        args += ["--policy-file", policy_file]
+    args.append(task_text)
+    return args
+
+
 async def run_kopicode(
     *,
     binary: str,
@@ -161,10 +179,7 @@ async def run_kopicode(
     happens one layer up, in the satay task that calls this
     (``cuttlefish.tasks.delegate``).
     """
-    args = [binary, "run", "--print"]
-    if policy_file is not None:
-        args += ["--policy-file", policy_file]
-    args.append(task_text)
+    args = build_kopicode_argv(binary, task_text, policy_file=policy_file)
 
     try:
         process = await asyncio.create_subprocess_exec(
@@ -188,12 +203,54 @@ async def run_kopicode(
         raise DelegationError(f"kopicode timed out after {timeout}s") from exc
     await process.wait()
 
-    events = _parse_ndjson(stdout_bytes)
+    return classify_kopicode_output(
+        stdout_bytes.decode("utf-8", errors="replace"),
+        stderr_bytes.decode("utf-8", errors="replace"),
+        returncode=process.returncode,
+    )
+
+
+async def run_kopicode_in_sandbox(
+    provider: SandboxProvider,
+    handle: SandboxHandle,
+    *,
+    binary: str,
+    task_text: str,
+    root: str,
+    policy_file: str | None = None,
+    timeout: float | None = None,
+) -> DelegationOutcome:
+    """Run kopicode inside an already-created sandbox and classify what it did.
+
+    `binary`, `root`, and `policy_file` must already be paths *inside* the
+    sandbox — making the scratch checkout, the kopicode binary, and the policy
+    file visible there (e.g. :class:`~cuttlefish.sandbox.container.ContainerSandboxProvider`'s
+    bind mounts) is the caller's job (``cuttlefish.tasks.delegate``); this function
+    only runs the command and classifies its output, the same contract
+    :func:`run_kopicode` gives for a direct host subprocess.
+    """
+    args = build_kopicode_argv(binary, task_text, policy_file=policy_file)
+    try:
+        result = await provider.exec(handle, args, cwd=root, timeout=timeout)
+    except SandboxError as exc:
+        raise DelegationError(f"kopicode sandbox exec failed: {exc}") from exc
+    return classify_kopicode_output(result.stdout, result.stderr, returncode=result.exit_code)
+
+
+def classify_kopicode_output(
+    stdout_text: str, stderr_text: str, *, returncode: int | None
+) -> DelegationOutcome:
+    """Classify one already-captured ``run --print`` stdout/stderr pair.
+
+    Shared by both invocation paths (a direct host subprocess, or a sandboxed
+    ``exec``) so parsing and classification never diverge between them — only how
+    the raw output was obtained differs.
+    """
+    events = parse_ndjson(stdout_text)
     if not events:
-        stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
         raise DelegationError(
-            f"kopicode produced no session events (exit {process.returncode}); "
-            f"stderr: {stderr_text or '<empty>'}"
+            f"kopicode produced no session events (exit {returncode}); "
+            f"stderr: {stderr_text.strip() or '<empty>'}"
         )
     return classify_stream(events)
 
@@ -210,10 +267,10 @@ def _path_from_tool_detail(detail: object) -> str | None:
     return path if isinstance(path, str) and path else None
 
 
-def _parse_ndjson(stdout_bytes: bytes) -> list[Mapping[str, Any]]:
+def parse_ndjson(stdout_text: str) -> list[Mapping[str, Any]]:
     """Every non-header event line of a `run --print` stream, parsed as JSON."""
     events: list[Mapping[str, Any]] = []
-    for line in stdout_bytes.decode("utf-8", errors="replace").splitlines():
+    for line in stdout_text.splitlines():
         if not line.strip():
             continue
         try:

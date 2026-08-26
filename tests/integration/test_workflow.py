@@ -30,6 +30,7 @@ from cuttlefish.episodic.events import (
 from cuttlefish.episodic.store import EpisodicStore
 from cuttlefish.llm.provider import LlmResponse
 from cuttlefish.llm.replay import ReplayLlmProvider
+from cuttlefish.sandbox.container import ContainerSandboxProvider
 from cuttlefish.workflow import run_task
 
 
@@ -123,6 +124,58 @@ async def test_a_declared_allowlist_is_recorded_on_the_journaled_delegation(
         event.payload for event in events if isinstance(event.payload, DelegationStarted)
     )
     assert delegation_started.policy_allow == declared_allow
+
+    episodic_store.close()
+    satay_store.close()
+
+
+@pytest.mark.requires_kopicode
+@pytest.mark.requires_docker
+async def test_a_sandboxed_delegation_is_recorded_and_still_reaches_the_real_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """KAN-1010: with a sandbox configured, the delegation routes through it --
+    proven mechanically (mount, exec, argv, cwd all correct) without a live model
+    credential, the same "no provider configured" posture the direct-host tests
+    already take. A real edit landing through the sandbox is a separate, live-
+    credential-gated test (tests/integration/delegate/test_kopicode_sandbox_live.py).
+    """
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    episodic_store = EpisodicStore.open(tmp_path / "episodic.db")
+    runtime.configure(
+        runtime.Runtime(
+            episodic_store=episodic_store,
+            llm_provider=ReplayLlmProvider([]),
+            kopicode_binary="kopicode",
+            sandbox_provider=ContainerSandboxProvider(),
+        )
+    )
+    satay_store = SQLiteStore.open(":memory:")
+    task_id = "test-task-sandboxed"
+    root = tmp_path / "scratch"
+    root.mkdir()
+
+    handle = start(
+        run_task,
+        {"task_id": task_id, "text": "add a .gitignore entry", "root": str(root)},
+        run_id=task_id,
+        store=satay_store,
+    )
+    result = await handle.result()
+
+    assert result["status"] == "failed"
+
+    events = list(episodic_store.read(task_id))
+    delegation_started = next(
+        event.payload for event in events if isinstance(event.payload, DelegationStarted)
+    )
+    assert delegation_started.sandbox == "container"
+    delegation_failed = next(
+        event.payload for event in events if isinstance(event.payload, DelegationFailed)
+    )
+    assert "OPENROUTER_API_KEY is not set" in delegation_failed.reason
 
     episodic_store.close()
     satay_store.close()

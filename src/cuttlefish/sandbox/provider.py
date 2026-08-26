@@ -1,17 +1,18 @@
 """The ``SandboxProvider`` seam for real process/container containment (ADR-0002, Q12).
 
-Not wired into the kopicode delegation yet — that is V2 step 2
-(``docs/SLICES.md``, KAN-1010). This module is the interface itself: create,
-exec, snapshot, destroy, loosely matching the shape OpenAI's Agents SDK already
-standardised across seven sandbox providers, so this project is compatible with
-an emerging convention rather than inventing its own (QUESTIONS.md Q12).
+The interface itself: create, exec, snapshot, destroy, loosely matching the
+shape OpenAI's Agents SDK already standardised across seven sandbox providers,
+so this project is compatible with an emerging convention rather than inventing
+its own (QUESTIONS.md Q12). ``cuttlefish.tasks.delegate`` (docs/SLICES.md V2
+step 2, KAN-1010) routes the kopicode delegation through whichever backend is
+configured on ``runtime.Runtime.sandbox_provider``.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import ClassVar, Protocol
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,11 +47,22 @@ class SnapshotHandle:
 class SandboxSpec:
     """What ``create`` asks a provider to start, kept separate from the handle it
     returns so a caller's request and a provider's own bookkeeping never share one
-    type."""
+    type.
+
+    ``mounts`` (host path -> in-sandbox path) is honoured by
+    :class:`~cuttlefish.sandbox.container.ContainerSandboxProvider` as a real bind
+    mount — the only backend that can, since it runs on the same host. There is
+    no equivalent for a remote backend like E2B (there is no local filesystem to
+    bind into a remote microVM); :class:`~cuttlefish.sandbox.e2b.E2bSandboxProvider`
+    raises :class:`SandboxError` for a non-empty ``mounts`` rather than silently
+    ignoring it, so a caller that switches backends fails loudly instead of
+    getting a sandbox that quietly can't see the files it asked for.
+    """
 
     template: str | None = None
     timeout: float | None = None
     envs: Mapping[str, str] = field(default_factory=dict)
+    mounts: Mapping[str, str] = field(default_factory=dict)
 
 
 class SandboxError(Exception):
@@ -61,10 +73,17 @@ class SandboxError(Exception):
 class SandboxProvider(Protocol):
     """A cuttlefish-facing sandbox provider: create, exec, snapshot, destroy.
 
-    E2B is the only backend this project builds (ADR-0002's decision) — this
-    Protocol exists so the kopicode delegation (V2 step 2) depends on this shape,
-    not on E2B's own client directly.
+    This Protocol exists so the kopicode delegation (V2 step 2) depends on this
+    shape, not on any one backend's own client directly.
+
+    ``BACKEND_NAME`` is this project's own small addition, not part of the
+    OpenAI Agents SDK shape it otherwise mirrors: the episodic journal records
+    which backend actually ran a delegation (``DelegationStarted.sandbox``), and
+    that has to come from somewhere stable, not a Python class name a refactor
+    could quietly change.
     """
+
+    BACKEND_NAME: ClassVar[str]
 
     async def create(self, spec: SandboxSpec | None = None) -> SandboxHandle: ...
 
