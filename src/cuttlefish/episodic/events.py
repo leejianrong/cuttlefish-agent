@@ -68,6 +68,11 @@ class DelegationStarted:
     # default and everything requiring permission is refused. Present once a policy
     # file is written for the call (SLICES.md V1 step 8, ADR-0002's addendum).
     policy_allow: list[list[str]] | None = None
+    # None when the call ran directly on the host (V1's original, still-accepted
+    # exception) rather than inside a sandbox (SLICES.md V2 step 2, KAN-1010) —
+    # the backend's own name ("container", "e2b"), not an opaque flag, so the
+    # journal itself says what actually ran the delegation.
+    sandbox: str | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

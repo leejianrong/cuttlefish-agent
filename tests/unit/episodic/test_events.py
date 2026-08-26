@@ -30,6 +30,12 @@ KNOWN_PAYLOADS: list[EventPayload] = [
     LlmCallFailed(model="claude", prompt="hi", error="rate limited"),
     DelegationStarted(task_text="fix the bug", root="/tmp/scratch"),
     DelegationStarted(task_text="fix the bug", root="/tmp/scratch", policy_allow=[["go", "test"]]),
+    DelegationStarted(
+        task_text="fix the bug",
+        root="/tmp/scratch",
+        policy_allow=[["go", "test"]],
+        sandbox="container",
+    ),
     DelegationCompleted(summary="added the entry", edited_paths=[".gitignore"]),
     DelegationRefused(reason="run_shell is not on the declared allowlist"),
     DelegationFailed(reason="kopicode binary exited 1"),

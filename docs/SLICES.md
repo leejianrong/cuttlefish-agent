@@ -96,12 +96,27 @@ a second real policy to compare it against.
    container containment as well as a microVM's - see ADR-0002's 2026-08-26
    addendum and `docs/QUESTIONS.md` Q27.
 2. Route the kopicode delegation through it instead of a bare scratch checkout.
+   Landed against the container backend specifically (`CUTTLEFISH_SANDBOX=container`,
+   opt-in - unconfigured still means V1's original direct-host behaviour, not a
+   default this project widened quietly). The scratch checkout, the kopicode
+   binary, and the policy file are bind-mounted in rather than copied, so a real
+   edit lands on the host exactly where V1 always put it. Two real gaps only
+   showed up running this live, not from reasoning about the design up front: a
+   container doesn't inherit the host's environment, so kopicode's own
+   model-provider credential has to be forwarded explicitly; and a bare base
+   image (verified against a few candidates) typically ships no CA bundle at
+   all, so an outbound HTTPS call fails TLS verification unless one is
+   provided - fixed by reusing whatever CA bundle the docker daemon's own host
+   already has, since anything that can `docker pull` already needs one.
 3. Generalise V1's hardcoded allowlist into a declared, per-task policy, informed
-   by whatever V1's fixed allowlist turned out to actually need.
+   by whatever V1's fixed allowlist turned out to actually need. Landed as a
+   repeatable `cuttlefish run --allow "<shell command>"` flag.
 
-**Demo:** the same delegation from V1, now running inside an E2B sandbox rather
-than a bare scratch checkout, with the policy declared per task rather than fixed
-in code.
+**Demo:** the same delegation from V1, now running inside a container sandbox
+rather than a bare scratch checkout, with the policy declared per task rather
+than fixed in code. (E2B remains the backend for the same demo once there's a
+live account to run it against - the interface doesn't care which backend a
+given task uses.)
 
 **Rests on assumptions:** ADR-0002's trigger condition (multi-tenant exposure, or
 task input the operator didn't author themselves) has actually occurred by the

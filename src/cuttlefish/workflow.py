@@ -14,6 +14,7 @@ from typing import Any, NotRequired, TypedDict
 
 import satay
 
+from cuttlefish import runtime
 from cuttlefish.delegate.kopicode import DelegationError
 from cuttlefish.delegate.policy import DEFAULT_SHELL_ALLOWLIST
 from cuttlefish.episodic.events import (
@@ -69,10 +70,13 @@ async def run_task(task_input: TaskInput) -> dict[str, Any]:
 
     # Every delegation now runs behind kopicode's declared-allowlist policy gate
     # (KAN-987, ADR-0002's addendum) -- this records what was actually declared
-    # for this task (KAN-1011), not just what was asked.
+    # for this task (KAN-1011), and which sandbox backend (if any) actually ran
+    # it (KAN-1010) -- not just what was asked.
+    sandbox_provider = runtime.current().sandbox_provider
+    sandbox_name = sandbox_provider.BACKEND_NAME if sandbox_provider is not None else None
     await journal(
         task_id,
-        DelegationStarted(task_text=text, root=root, policy_allow=allow),
+        DelegationStarted(task_text=text, root=root, policy_allow=allow, sandbox=sandbox_name),
     )
 
     try:

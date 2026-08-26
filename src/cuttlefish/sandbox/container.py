@@ -11,8 +11,11 @@ binary, invoked as-is, no new protocol of this project's own.
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 from collections.abc import Sequence
+from pathlib import Path
+from typing import ClassVar
 
 from cuttlefish.sandbox.provider import (
     ExecResult,
@@ -24,6 +27,23 @@ from cuttlefish.sandbox.provider import (
 
 DEFAULT_IMAGE = "debian:bookworm-slim"
 DEFAULT_DOCKER_BINARY = "docker"
+
+#: Bind-mounted read-only into every container this backend starts, from the
+#: docker *daemon's* own host filesystem (a bind mount's host side always
+#: resolves there, not the `docker` CLI client's — the same filesystem on
+#: Linux, the VM Docker Desktop runs on macOS/Windows). Outbound HTTPS (e.g.
+#: kopicode calling a model provider) needs a CA bundle, and a bare OS base
+#: image typically doesn't ship one — verified empirically against this
+#: backend's own default image and a couple of others (neither
+#: debian:bookworm-slim nor ubuntu:24.04 do; python:3.12-slim happens to,
+#: incidentally, as a side effect of something else it installs). Any host
+#: that can successfully `docker pull` already has a working CA bundle
+#: *somewhere* — Docker itself needs one to fetch images over HTTPS — so
+#: reusing it here needs no new dependency, network access, or package
+#: install at sandbox-creation time. Skipped, not required, if this host
+#: doesn't have one at the standard path; a caller's own image may already
+#: carry a valid bundle of its own.
+_HOST_CA_BUNDLE = Path("/etc/ssl/certs/ca-certificates.crt")
 
 #: docker's own stderr wording when a container id no longer refers to anything
 #: live — distinguishes "this handle is stale" (a SandboxError) from "the
@@ -44,6 +64,8 @@ class ContainerSandboxProvider:
     TTL, not an idle timeout) rather than a new concept of this module's own.
     """
 
+    BACKEND_NAME: ClassVar[str] = "container"
+
     def __init__(
         self, *, image: str | None = None, docker_binary: str = DEFAULT_DOCKER_BINARY
     ) -> None:
@@ -58,8 +80,26 @@ class ContainerSandboxProvider:
             str(int(resolved_spec.timeout)) if resolved_spec.timeout is not None else "infinity"
         )
         args = ["run", "-d"]
+        if hasattr(os, "getuid"):
+            # Container root has no host-side identity of its own: a bind mount
+            # is the same host inode either way, so anything kopicode creates
+            # inside one as root lands on the host owned by root too, exactly
+            # as unremovable by the operator's own user as it would be if
+            # kopicode had somehow run as root on the host directly (verified
+            # live: an earlier run left a root-owned `.kopicode/` in a scratch
+            # checkout a normal user couldn't clean up). Running as the
+            # operator's own uid/gid instead means anything created inside a
+            # bind-mounted host path is owned by the same user who created the
+            # scratch checkout in the first place — not expressible on a
+            # platform with no POSIX uid (`os.getuid` absent), where this is
+            # simply skipped rather than failing.
+            args += ["-u", f"{os.getuid()}:{os.getgid()}"]
+        if _HOST_CA_BUNDLE.is_file():
+            args += ["-v", f"{_HOST_CA_BUNDLE}:{_HOST_CA_BUNDLE}:ro"]
         for key, value in resolved_spec.envs.items():
             args += ["-e", f"{key}={value}"]
+        for host_path, sandbox_path in resolved_spec.mounts.items():
+            args += ["-v", f"{host_path}:{sandbox_path}"]
         args += [resolved_spec.template or self._image, "sleep", sleep_for]
 
         code, stdout, stderr = await self._docker(*args)

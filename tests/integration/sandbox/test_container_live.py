@@ -8,6 +8,8 @@ Unlike the E2B backend's live test, this needs no external account or credential
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from cuttlefish.sandbox import ContainerSandboxProvider, SandboxError, SandboxSpec
@@ -61,3 +63,24 @@ async def test_destroy_is_idempotent() -> None:
     handle = await provider.create()
     await provider.destroy(handle)
     await provider.destroy(handle)
+
+
+@pytest.mark.requires_docker
+async def test_a_declared_mount_makes_the_host_path_visible_and_writable(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "existing.txt").write_text("from the host\n")
+    provider = ContainerSandboxProvider()
+    handle = await provider.create(SandboxSpec(mounts={str(tmp_path): str(tmp_path)}))
+    try:
+        read_back = await provider.exec(handle, ["cat", str(tmp_path / "existing.txt")])
+        assert read_back.stdout == "from the host\n"
+
+        write_result = await provider.exec(
+            handle, ["sh", "-c", f"echo 'from the sandbox' > {tmp_path / 'new.txt'}"]
+        )
+        assert write_result.exit_code == 0
+    finally:
+        await provider.destroy(handle)
+
+    assert (tmp_path / "new.txt").read_text() == "from the sandbox\n"
