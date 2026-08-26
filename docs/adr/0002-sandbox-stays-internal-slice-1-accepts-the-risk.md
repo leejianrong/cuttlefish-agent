@@ -162,3 +162,56 @@ it stays as written, for judging when V2 is *necessary* rather than merely
 different, explicit basis: closing an existing, self-inflicted compliance
 gap, while the necessity trigger itself still hasn't fired. See
 `docs/QUESTIONS.md` Q26.
+
+## Addendum, 2026-08-26: a container backend joins E2B
+
+This ADR's decision section says "E2B is the only backend when [the sandbox
+package] is built." That line is amended, not retired: `cuttlefish/sandbox`
+gets a second backend, a container-based one, alongside E2B - implemented
+against the same `create`/`exec`/`snapshot`/`destroy` Protocol, not a new
+interface of its own.
+
+The reason is the same 2026-08-23 addendum above, read literally: kopicode
+ADR-0011 decision 4 requires "real **process or container** containment," not
+a microVM specifically. A container backend satisfies that stated contract
+exactly as well as E2B does, for the part of the trigger this project already
+carries (KAN-1010 needs *some* real containment to route the delegation
+through). What E2B needs that a container backend doesn't is a live account
+and a real credential this project doesn't have yet (KAN-1009's own
+`requires_e2b_credential` test is still unexercised against a real backend,
+per the `cuttlefish-agent` board). A container backend needs neither - it runs
+against a container runtime already on the operator's own machine, at zero
+incremental cost - so it unblocks KAN-1010 today instead of waiting on an
+external dependency this project doesn't control.
+
+This is not a retreat from the original decision's reasoning against building
+a *second sandbox product*. That reasoning was about competing with funded,
+consolidating incumbents (E2B, Modal, Daytona, and the rest of the OpenAI
+Agents SDK's seven) on general-purpose sandbox infrastructure as a service -
+it was never an argument against implementing this project's own, already-
+defined interface against a second, minimal backend using infrastructure
+(a local container runtime) the operator's machine already provides.
+Wrapping `docker exec` behind a Protocol this project already owns for a
+different backend is not a new product; it's the same internal package ADR-
+0002 always intended, with one more small implementation of it.
+
+Raw Firecracker was considered and rejected as a *third* option, not chosen
+over containers: E2B's own sandboxes already run on Firecracker, so "E2B or
+Firecracker directly" was never really an either/or at the isolation-mechanism
+level, only at the "who operates it" level. Operating Firecracker directly
+would mean this project builds and runs the jailer, image pipeline, host
+fleet, and networking E2B's managed service exists to hide - exactly the
+disproportionate, multi-platform security-engineering effort kopicode's own
+ADR-0008 already argued against taking on at this project's current size, and
+it would drop Linux+KVM as a hard requirement, breaking macOS as a first-class
+platform (`docs/QUESTIONS.md` Q20). Container isolation is weaker than a
+microVM's (a shared host kernel, not a separate one) - a real trade-off, not a
+free upgrade - but it is still real containment, a large step up from V1's
+bare scratch checkout, and it's available today rather than gated on an
+account this project is still waiting on.
+
+Which backend a given task actually runs under - container, E2B, or (with
+neither configured) V1's original no-sandbox exception - is not decided here;
+that's KAN-1010's own wiring question, informed by whatever real usage turns
+out to need, the same restraint this ADR's original decision already argues
+for. See `docs/QUESTIONS.md` Q27.

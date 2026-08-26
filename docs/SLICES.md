@@ -90,7 +90,11 @@ a second real policy to compare it against.
 **Build plan**
 
 1. Build `cuttlefish/sandbox`: the create/exec/snapshot/destroy interface, one
-   E2B-backed implementation.
+   E2B-backed implementation. A second, container-backed implementation was
+   added against the same interface once it turned out E2B needed a live
+   account this project didn't have yet, and kopicode's own contract permits
+   container containment as well as a microVM's - see ADR-0002's 2026-08-26
+   addendum and `docs/QUESTIONS.md` Q27.
 2. Route the kopicode delegation through it instead of a bare scratch checkout.
 3. Generalise V1's hardcoded allowlist into a declared, per-task policy, informed
    by whatever V1's fixed allowlist turned out to actually need.
