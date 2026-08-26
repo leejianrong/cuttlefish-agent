@@ -130,3 +130,35 @@ trigger condition, though: V2's sandbox is no longer only "if cuttlefish
 acquires multi-tenant exposure or untrusted task input" - it is also the thing
 that brings cuttlefish's delegation into compliance with kopicode's own stated
 contract for using its policy gate at all. See `docs/QUESTIONS.md` Q25.
+
+## Addendum, 2026-08-26: V2 starts before this ADR's own trigger condition fires
+
+This ADR named two trigger conditions for building the sandbox: cuttlefish
+acquiring multi-tenant exposure, or being pointed at task input the operator
+didn't author themselves. Neither has happened as of this addendum. Recorded
+honestly: the operator is choosing to start `docs/SLICES.md` V2's build plan
+anyway, which `docs/SLICES.md` itself names as "speculative work ahead of a
+real need, the same trap kopicode's own ADR-0008 warns against" - this is not
+a claim that the trigger fired.
+
+The reason for starting anyway isn't a new fact that reinterprets the
+trigger; it's the compliance gap the addendum above already named and left
+open. Since KAN-987 landed, slice 1's delegation has been making real,
+policy-gated invocations under an exception this ADR grants unilaterally:
+kopicode ADR-0011 decision 4 requires orchestrator-side containment for any
+policy-gated invocation, with no single-operator carve-out, and cuttlefish's
+exception rests on this ADR's own trust-model reasoning, not on kopicode
+agreeing to it. That gap doesn't get more excusable the longer it sits open,
+or the more live, unattended invocations run on top of it. V2's sandbox is
+already fully specified and ready to build - the interface shape decided at
+Q12, E2B as the only backend - so it is well-scoped work, not a guess about
+what shape it should take. Starting it now pays down a named exception this
+project already carries, rather than waiting for a second, unrelated trigger
+to force the issue.
+
+This does not retire the trigger condition in this ADR's decision section -
+it stays as written, for judging when V2 is *necessary* rather than merely
+*available to build*. This addendum records that V2 is starting on a
+different, explicit basis: closing an existing, self-inflicted compliance
+gap, while the necessity trigger itself still hasn't fired. See
+`docs/QUESTIONS.md` Q26.

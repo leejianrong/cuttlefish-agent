@@ -36,6 +36,7 @@ None. Both forks raised in round 1 were resolved the same round.
 | Q23 | What is cuttlefish's actual trust model, given it's meant to hold credentials and run unattended? | ASSUMED | One trusted operator, same as kopicode's own ADR-0008, but the risk it accepts is different in kind: kopicode's worst case is a bad diff, reversible with `git revert`; cuttlefish's worst case is a long-lived credential misused with nobody watching. Named plainly rather than inherited by assumption. | ADR-0002 |
 | Q24 | Are episodic events versioned from the first commit? | ASSUMED | Yes, the same discipline kopicode's own journal uses: an unmarshaller that preserves an unknown future event type rather than dropping it. | ADR-0004 |
 | Q25 | kopicode board KAN-987 landed (2026-08-23, PR #109) with ADR-0011 decision 4 requiring orchestrator-side containment for any policy-gated invocation, naming cuttlefish's sandbox as the obligated party, no single-operator carve-out. Does slice 1 still use the policy gate for a real edit without the sandbox? | DECIDED | Yes. Slice 1 proceeds on ADR-0002's existing trust-model reasoning (one operator, their own task, their own checkout) - the same reasoning already accepted for the whole delegation, now extended explicitly to cover a policy-gated real edit rather than only the read-only/refusal case. Written down as a named exception, not silently resolved either way. | ADR-0002 addendum |
+| Q26 | ADR-0002's own trigger for building the sandbox (multi-tenant exposure, or untrusted task input) hasn't fired, and `docs/SLICES.md` V2 names starting early as speculative work ahead of a real need. Does cuttlefish start V2 anyway? | DECIDED | Yes, but not by claiming the trigger fired - it hasn't. V2 starts to close a different, already-named gap: the compliance tension ADR-0002's first addendum recorded (kopicode ADR-0011 decision 4 requires containment for any policy-gated invocation, no single-operator carve-out) has been open and accruing real, unattended invocations since KAN-987 landed. The trigger condition stays as written for judging necessity; this is a separate, named reason for starting anyway. | ADR-0002 addendum, 2026-08-26 |
 
 ## Coverage
 
@@ -51,5 +52,5 @@ None. Both forks raised in round 1 were resolved the same round.
 | External dependencies | Q4, Q11, Q19 |
 | Runtime and deployment | Q20 |
 | Measurable success | Q21 |
-| Security and secrets | Q22, Q23, Q25 |
+| Security and secrets | Q22, Q23, Q25, Q26 |
 | Versioning and migration | Q24 |
