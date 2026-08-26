@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 
-from cuttlefish.episodic.redact import Redactor
+from cuttlefish.episodic.redact import DEFAULT_SECRET_ENV_VARS, Redactor
 
 
 def _lookup(values: dict[str, str]) -> Callable[[str], str | None]:
@@ -65,6 +65,12 @@ def test_scrub_catches_the_json_escaped_spelling_too() -> None:
     assert changed
     assert "\\\\def" not in redacted
     assert "[redacted:ANTHROPIC_API_KEY]" in redacted
+
+
+def test_default_secret_env_vars_covers_the_e2b_credential() -> None:
+    # ADR-0002: the sandbox provider reads E2B_API_KEY, so it must be in the
+    # default redaction list the same way every other provider credential is.
+    assert "E2B_API_KEY" in DEFAULT_SECRET_ENV_VARS
 
 
 def test_scrub_replaces_the_longer_secret_first_when_one_contains_another() -> None:

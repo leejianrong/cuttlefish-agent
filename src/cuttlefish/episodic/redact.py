@@ -19,12 +19,14 @@ import os
 from collections.abc import Callable, Sequence
 
 #: Environment variables whose values must never reach the episodic journal:
-#: cuttlefish's own LLM provider credential, plus the coding-provider keys a
-#: delegated kopicode invocation's tool output might otherwise echo verbatim.
+#: cuttlefish's own LLM provider credential, the coding-provider keys a
+#: delegated kopicode invocation's tool output might otherwise echo verbatim,
+#: and (ADR-0002) the E2B credential the sandbox provider reads.
 DEFAULT_SECRET_ENV_VARS: tuple[str, ...] = (
     "ANTHROPIC_API_KEY",
     "OPENAI_API_KEY",
     "OPENROUTER_API_KEY",
+    "E2B_API_KEY",
 )
 
 #: The shortest value worth redacting (matches kopicode's own ``minSecretLen``). A
