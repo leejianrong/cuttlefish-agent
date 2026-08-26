@@ -84,6 +84,51 @@ async def test_a_refused_delegation_is_a_journaled_failure(
 
 
 @pytest.mark.requires_kopicode
+async def test_a_declared_allowlist_is_recorded_on_the_journaled_delegation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """KAN-1011: an operator-declared, per-task policy replaces V1's fixed one."""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    episodic_store = EpisodicStore.open(tmp_path / "episodic.db")
+    runtime.configure(
+        runtime.Runtime(
+            episodic_store=episodic_store,
+            llm_provider=ReplayLlmProvider([]),
+            kopicode_binary="kopicode",
+        )
+    )
+    satay_store = SQLiteStore.open(":memory:")
+    task_id = "test-task-allow"
+    root = tmp_path / "scratch"
+    root.mkdir()
+    declared_allow = [["go", "test"], ["npm", "test"]]
+
+    handle = start(
+        run_task,
+        {
+            "task_id": task_id,
+            "text": "run the test suite",
+            "root": str(root),
+            "allow": declared_allow,
+        },
+        run_id=task_id,
+        store=satay_store,
+    )
+    await handle.result()
+
+    events = list(episodic_store.read(task_id))
+    delegation_started = next(
+        event.payload for event in events if isinstance(event.payload, DelegationStarted)
+    )
+    assert delegation_started.policy_allow == declared_allow
+
+    episodic_store.close()
+    satay_store.close()
+
+
+@pytest.mark.requires_kopicode
 async def test_handover_fires_and_is_readable_from_the_journal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

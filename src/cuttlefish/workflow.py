@@ -42,12 +42,18 @@ class TaskInput(TypedDict):
     ``token_budget`` is optional and defaults to ``handover.DEFAULT_TOKEN_BUDGET``
     — a test lowers it to force a handover deterministically rather than growing a
     real episodic window large enough to cross a realistic one.
+
+    ``allow`` is optional and defaults to ``policy.DEFAULT_SHELL_ALLOWLIST`` (V1's
+    original, hardcoded no-shell-commands-at-all policy) — the operator-declared,
+    per-task policy KAN-1011 adds (docs/SLICES.md V2 step 3), each entry one
+    allowed command as an argv list, in kopicode's own declared-allowlist grammar.
     """
 
     task_id: str
     text: str
     root: str
     token_budget: NotRequired[int]
+    allow: NotRequired[list[list[str]]]
 
 
 @satay.workflow
@@ -56,20 +62,21 @@ async def run_task(task_input: TaskInput) -> dict[str, Any]:
     text = task_input["text"]
     root = task_input["root"]
     token_budget = task_input.get("token_budget", DEFAULT_TOKEN_BUDGET)
+    allow = task_input.get("allow", DEFAULT_SHELL_ALLOWLIST)
 
     await journal(task_id, TaskSubmitted(text=text))
     await maybe_handover(task_id, token_budget=token_budget)
 
     # Every delegation now runs behind kopicode's declared-allowlist policy gate
-    # (KAN-987, ADR-0002's addendum) -- this records what was actually declared,
-    # not just what was asked.
+    # (KAN-987, ADR-0002's addendum) -- this records what was actually declared
+    # for this task (KAN-1011), not just what was asked.
     await journal(
         task_id,
-        DelegationStarted(task_text=text, root=root, policy_allow=DEFAULT_SHELL_ALLOWLIST),
+        DelegationStarted(task_text=text, root=root, policy_allow=allow),
     )
 
     try:
-        outcome = await delegate_to_kopicode(text, root)
+        outcome = await delegate_to_kopicode(text, root, allow=allow)
     except DelegationError as exc:
         # A plain (non-collected) awaited task's failure re-raises the task body's
         # own exception type unchanged — satay.TaskFailedError only wraps a

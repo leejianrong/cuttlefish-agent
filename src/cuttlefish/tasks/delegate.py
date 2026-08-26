@@ -8,8 +8,10 @@ side-effecting call safe rather than repeated — see
 close.
 
 Every call writes and passes kopicode's declared-allowlist policy file (KAN-987,
-``cuttlefish.delegate.policy``) rather than running unconfigured — the hardcoded,
-narrow policy PLAN.md's Scope describes, not a general per-task mechanism.
+``cuttlefish.delegate.policy``) rather than running unconfigured. ``allow`` is
+the operator-declared, per-task policy (KAN-1011, docs/SLICES.md V2 step 3) —
+``None`` falls back to ``write_policy_file``'s own default, V1's original
+hardcoded, no-shell-commands-at-all allowlist.
 """
 
 from __future__ import annotations
@@ -26,12 +28,14 @@ from cuttlefish.delegate.policy import write_policy_file
 
 
 @satay.task(side_effect=True)
-async def delegate_to_kopicode(task_text: str, root: str) -> DelegationOutcome:
+async def delegate_to_kopicode(
+    task_text: str, root: str, allow: list[list[str]] | None = None
+) -> DelegationOutcome:
     fd, policy_path_str = tempfile.mkstemp(prefix="cuttlefish-policy-", suffix=".toml")
     os.close(fd)
     policy_path = Path(policy_path_str)
     try:
-        write_policy_file(policy_path, root=root)
+        write_policy_file(policy_path, root=root, allow=allow)
         return await run_kopicode(
             binary=runtime.current().kopicode_binary,
             task_text=task_text,

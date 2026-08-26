@@ -40,6 +40,29 @@ async def test_a_written_policy_file_parses_cleanly_against_the_real_binary(
 
 
 @pytest.mark.requires_kopicode
+async def test_a_declared_allowlist_parses_cleanly_against_the_real_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """KAN-1011: a non-empty, operator-declared allowlist is still valid kopicode
+    policy grammar, not just V1's original empty one."""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    root = tmp_path / "scratch"
+    root.mkdir()
+    policy_path = tmp_path / "policy.toml"
+    write_policy_file(policy_path, root=str(root), allow=[["go", "test"], ["npm", "test"]])
+
+    with pytest.raises(DelegationError, match=r"no session events"):
+        await run_kopicode(
+            binary="kopicode",
+            task_text="add a .gitignore entry",
+            root=str(root),
+            policy_file=str(policy_path),
+        )
+
+
+@pytest.mark.requires_kopicode
 async def test_a_malformed_policy_file_is_refused_before_credential_resolution(
     tmp_path: Path,
 ) -> None:
