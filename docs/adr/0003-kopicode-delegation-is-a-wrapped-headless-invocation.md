@@ -1,8 +1,18 @@
 # ADR-0003: Delegation to kopicode wraps its existing headless surface, as a durable task
 
-- Status: Accepted
+- Status: Accepted; the single-backend assumption superseded 2026-09-20 by [ADR-0005](0005-agent-backend-becomes-a-pluggable-protocol.md)
 - Date: 2026-08-23
 - Deciders: Jian
+
+> **Superseded in part, 2026-09-20.** cuttlefish-crew's pivot makes the
+> coding-agent backend pluggable - kopicode is no longer assumed to be the
+> only one a task can be delegated to. Everything below about *how* the
+> kopicode wrapping itself works - `run --print`, NDJSON parsing,
+> `side_effect=True`, idempotency-key derivation, the reasoning against a
+> bespoke wire protocol - is preserved and still accurate: it now describes
+> `KopicodeBackend` specifically, one implementation of ADR-0005's
+> `AgentBackend` protocol, not the project's only delegation path. See
+> ADR-0005 for what changed and why.
 
 ## Context
 

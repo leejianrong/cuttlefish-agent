@@ -1,27 +1,35 @@
-# cuttlefish-agent
+# cuttlefish-crew
 
-A long-running assistant that survives crashes and remembers what it did.
+A fleet manager for teams of coding sub-agents, running across many software
+projects at once, so the operator stops babysitting a single agent's context
+window and its own demos by hand.
 
-Give it a task in plain language. If the task involves code, it hands the coding
-part to [kopicode](https://github.com/leejianrong/kopicode) rather than attempting
-the edit itself. If the process dies partway through, restarting it resumes from
-where it left off instead of starting over, because the core loop is a durable
-[satay](https://github.com/leejianrong/satay-runtime) workflow from the first line
-of code, not an ordinary async function wrapped in durability later. Everything
-that happens is written to one readable record, not scattered across logs that
-disagree with each other.
+Give a project's team a task in plain language. Each agent hands its coding
+work to a pluggable backend (today: [kopicode](https://github.com/leejianrong/kopicode),
+soon also headless Claude Code) rather than attempting the edit itself. If a
+task's process dies partway through, restarting it resumes from where it left
+off instead of starting over, because the core loop is a durable
+[satay](https://github.com/leejianrong/satay-runtime) workflow from the first
+line of code, not an ordinary async function wrapped in durability later.
+Everything that happens is written to one readable record, not scattered
+across logs that disagree with each other.
 
 ## Status
 
-Slice 1 is built: a real `cuttlefish run "<task>"` delegates to a real kopicode,
-behind its real declared-allowlist policy gate, journaled to a real episodic
-record, surviving a real killed-and-resumed process. See
-[`CLAUDE.md`](CLAUDE.md)'s build-status section for what's done, what each
-module is, and the one piece (a live end-to-end run against a working model
-credential) still open. The plan that got it there: [`docs/PLAN.md`](docs/PLAN.md),
-four architectural decisions in [`docs/adr/`](docs/adr/), the build order in
-[`docs/SLICES.md`](docs/SLICES.md), and the full decision register in
-[`docs/QUESTIONS.md`](docs/QUESTIONS.md).
+V1 and V2 are both complete and merged: a real `cuttlefish run "<task>"`
+delegates to a real kopicode, behind its real declared-allowlist policy gate,
+journaled to a real episodic record, optionally routed through a real
+sandbox, surviving a real killed-and-resumed process. See
+[`CLAUDE.md`](CLAUDE.md)'s build-status section for that history.
+
+As of 2026-09-20, the project is pivoting into **cuttlefish-crew**: a fleet
+manager running teams of coding sub-agents across many software projects at
+once, dashboard-observable, with automated context handover, steerable chat,
+and a hosting story for viewing a real demo without being at the machine
+it's running on. [`docs/PLAN.md`](docs/PLAN.md) is the current plan for that
+direction; the decisions behind it start at `docs/QUESTIONS.md` Q28, and five
+architectural decisions (including this pivot's own) live in
+[`docs/adr/`](docs/adr/). The build order is in [`docs/SLICES.md`](docs/SLICES.md).
 
 ## Usage
 
@@ -41,13 +49,17 @@ keyless, deterministic provider for smoke-testing the CLI itself.
 Long-running agent assistants (OpenClaw, Hermes, and their kind) run unattended for
 long stretches, and the ones available today handle memory badly. A crash loses
 whatever wasn't checkpointed. A long session either runs out of context or gets
-summarised by hand. Nothing distills what actually worked into something reusable
-next time. The operator ends up babysitting the agent to catch these failures,
-which defeats the point of running it unattended at all.
+summarised by hand. That's the problem V1/V2 solved, for one agent, one task.
 
-This suite already has a coding specialist built and measured (kopicode) and a
-durable-execution runtime built and released (satay-runtime). Nothing supervises
-either one over an unattended, long-running task. That's this project.
+The pain that's actually left, running coding agents for real: babysitting a
+single agent's context window, and babysitting its output - the UI, the demo,
+the actual user-facing behavior - because a green test suite doesn't tell you
+the product is right. Neither goes away with one durable task, and both
+compound the moment there's more than one project worth running unattended
+at once, with nowhere to see what every project's team is doing without
+being at the keyboard for each one. cuttlefish-crew is the fleet-level
+answer: a team per project, automated handover instead of manual `/clear`,
+and a dashboard the operator can watch from anywhere.
 
 ## What it's built on, and why
 
@@ -59,21 +71,30 @@ a rewrite of the part of the system that most needs to be correct. cuttlefish's
 core loop is a `@satay.workflow`, and every LLM call and every delegation is a
 `@satay.task`, from day one. See [ADR-0001](docs/adr/0001-satay-workflow-as-the-core-loop.md).
 
-**Delegation wraps kopicode's existing headless surface.** `kopicode run --print`
-already emits newline-delimited JSON on stdout instead of driving a terminal, built
-for kopicode's own benchmark runner but structurally exactly what a supervisor
-needs. cuttlefish wraps it as a durable satay task rather than inventing a new
-protocol between the two processes. See
-[ADR-0003](docs/adr/0003-kopicode-delegation-is-a-wrapped-headless-invocation.md).
+**Delegation wraps each backend's own existing headless surface, pluggably.**
+`kopicode run --print` already emits newline-delimited JSON on stdout instead
+of driving a terminal, built for kopicode's own benchmark runner but
+structurally exactly what a supervisor needs - cuttlefish-crew wraps it as a
+durable satay task rather than inventing a new protocol between the
+processes. That reasoning holds for whichever backend runs a given team's
+work, not just kopicode: kopicode is the reference implementation, headless
+Claude Code is the second, both behind one `AgentBackend` interface rather
+than the project being hardcoded to either. See
+[ADR-0003](docs/adr/0003-kopicode-delegation-is-a-wrapped-headless-invocation.md)
+(kopicode's own delegation mechanics, still accurate) and
+[ADR-0005](docs/adr/0005-agent-backend-becomes-a-pluggable-protocol.md) (why
+it's no longer the only one).
 
-**No sandbox yet, and that's a decision, not an oversight.** General-purpose
-ephemeral sandboxing (E2B, Modal, and the rest) is already a mature, consolidating
-market, and this project has no reason to compete with it. When containment is
-built, it stays an internal package here rather than becoming a separate product,
-because this suite already made the opposite mistake once with kopicode's own
-engine and reversed it. Slice 1 accepts the same trust model kopicode's own
-ADR-0008 accepts: one operator, their own task, their own machine. See
-[ADR-0002](docs/adr/0002-sandbox-stays-internal-slice-1-accepts-the-risk.md).
+**Two sandbox backends exist, and containment stays an internal package.**
+V2 built `cuttlefish/sandbox` for real: a container-backed provider (no
+account needed) and an E2B-backed one (built, not yet run against a live
+account), both behind one create/exec/snapshot/destroy interface, opt-in via
+`CUTTLEFISH_SANDBOX`. It stays an internal package rather than becoming a
+separate product, because this suite already made the opposite mistake once
+with kopicode's own engine and reversed it. See
+[ADR-0002](docs/adr/0002-sandbox-stays-internal-slice-1-accepts-the-risk.md),
+now also carrying the multi-operator question cuttlefish-crew's product
+ambition raises.
 
 **Memory is four tiers, and this milestone builds two.** Working memory (context
 budget and an automatic handover) and episodic memory (a durable, readable record
@@ -88,6 +109,12 @@ systems) are named and deferred, not designed yet. See
 as much as it's the word for the animal, which is a bad connotation for an
 unattended agent to carry. `cuttlefish-crate`, a possible future sandbox product
 under the same name, deliberately doesn't exist yet - see ADR-0002.
+
+`cuttlefish-agent` becomes **cuttlefish-crew** as of 2026-09-20, once the
+project's direction shifted from a single supervised task to a fleet of
+project teams - see [`docs/PLAN.md`](docs/PLAN.md). The Python package import
+path (`cuttlefish`) is unchanged; the repository itself is still named
+`cuttlefish-agent` until that catches up to match.
 
 ## The rest of the suite
 

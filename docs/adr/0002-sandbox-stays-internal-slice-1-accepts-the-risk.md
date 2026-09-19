@@ -215,3 +215,37 @@ neither configured) V1's original no-sandbox exception - is not decided here;
 that's KAN-1010's own wiring question, informed by whatever real usage turns
 out to need, the same restraint this ADR's original decision already argues
 for. See `docs/QUESTIONS.md` Q27.
+
+## Addendum, 2026-09-20: the multi-tenant trigger fires - for real this time, and only one of the two
+
+This ADR named two genuinely independent triggers, and cuttlefish-crew's
+pivot toward being a product for other operators (not only personal use,
+`docs/QUESTIONS.md` Q28) fires exactly one of them.
+
+**Trigger 1 - does the sandbox become a separate, spun-out product** (a
+`cuttlefish-crate`)? Unaffected. No second real consumer of the
+`create`/`exec`/`snapshot`/`destroy` interface itself has appeared;
+cuttlefish-crew is still the only thing that calls it. It stays an internal
+package.
+
+**Trigger 2 - is real containment *necessary*, gated on "cuttlefish
+acquiring multi-tenant exposure, or being pointed at task input the operator
+didn't author"?** This one fires, plainly, for the first time as a real
+condition rather than an anticipated one. The operator has said cuttlefish-
+crew is being built toward a product other operators will run their own
+project fleets on. That is multi-tenant exposure by definition. No new
+containment code is owed by this addendum - V2 already built real
+containment (the container and E2B backends) before this trigger fired, for
+a different, compliance-driven reason (the 2026-08-26 addendum above). What
+actually changes is the trust-model framing this ADR and its addenda use
+throughout: "one operator, running their own task, against their own
+machine" stops being the operating assumption the moment a second, different
+operator's project can run on the same fleet.
+
+That leaves a real, open design question this addendum names rather than
+answers: isolation *between* operators - whose sandbox, whose secrets
+(`docs/QUESTIONS.md` Q34), whose dashboard view a given operator can reach -
+is not the same problem as isolating one operator's task from their own
+host, and this ADR's existing interface and backends don't settle it. It
+belongs to whichever slice actually builds multi-operator hosting
+(`docs/PLAN.md`'s slice E), not to this addendum.
