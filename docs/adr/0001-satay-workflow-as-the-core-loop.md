@@ -75,3 +75,29 @@ not on a first successful run. And because this project is satay's first real
 external tenant, some of what breaks will be gaps in satay's own public surface
 rather than bugs in this repo - that risk is accepted, not hidden, and is one of
 this plan's open risks.
+
+## Addendum, 2026-09-20: external steering doesn't need a new satay primitive
+
+cuttlefish-crew's pivot (`docs/PLAN.md`) adds a requirement this ADR's
+original decision didn't anticipate: a human should be able to redirect a
+running task's work mid-flight, not only read its journal afterward. Checked
+directly against satay-runtime's own source (2026-09-20, not assumed):
+`satay.wait_for_event`/`satay.send_event` - a durable pub/sub inbox a
+workflow can park on and an external caller can deliver into, with its own
+ordering-semantics decision recorded in satay-runtime's ADR-0021 - already
+covers exactly this. It is mature, not scaffolding: it has a control-plane
+HTTP write path alongside the library call.
+
+This ADR's core decision doesn't change: the loop stays a `@satay.workflow`
+from the first line. What's added, in a later slice
+(`docs/PLAN.md`'s slice C), is a workflow-shape pattern: race a short-timeout
+`wait_for_event` against the loop's normal forward progress so an external
+steering message gets picked up between durable calls, without blocking
+progress when nothing arrives.
+
+Two real gaps were found and filed against satay-runtime rather than worked
+around inside this repo, per this project's posture that satay's own roadmap
+now follows cuttlefish-crew's needs (`docs/QUESTIONS.md` Q33): no live query
+into a running workflow's in-progress custom state beyond its replay-derived
+timeline (satay-runtime#98), and no documented example of this specific
+external-steering pattern (satay-runtime#99).

@@ -141,3 +141,101 @@ of a real need, the same trap kopicode's own ADR-0008 warns against.
 
 - The policy's allow/deny decision is exercised against a table of declared
   policies and requests, independent of the sandbox itself.
+
+## V3: cuttlefish-crew — a pluggable, multi-project fleet
+
+V1 and V2 proved one durable, sandboxed delegation to kopicode. V3 is the
+pivot: cuttlefish becomes cuttlefish-crew, a fleet manager running teams of
+coding sub-agents across many projects at once. See `docs/PLAN.md` for the
+full problem/solution and `docs/QUESTIONS.md` Q28 onward for the decisions
+behind it. Slice A is scoped and ready to build; slices B-F are named and
+real but not yet planned in this file - each gets its own build plan once
+the slice before it ships and the interface it needs actually exists.
+
+### Slice A: a pluggable agent backend, and the external rebrand
+
+**Delivers:** `docs/PLAN.md`'s R0-R6.
+
+**Build plan**
+
+1. Define `cuttlefish.agents.AgentBackend` (a Protocol): invoke a delegation,
+   parse the backend's own native output into one `DelegationOutcome`,
+   declare/accept a policy file, report what containment/policy guarantees
+   it can actually make (ADR-0005).
+2. Move today's kopicode delegation logic behind it as `KopicodeBackend`,
+   behavior preserved byte for byte: same NDJSON parsing, same KAN-987-
+   descended policy file generation, same sandbox routing.
+3. Generalize the episodic event schema to a backend-agnostic delegation
+   outcome, forward-compatible with every event V1/V2 already wrote
+   (ADR-0004's unmarshalling discipline, exercised for real).
+4. Implement `ClaudeCodeBackend` against the same interface, wrapping
+   headless Claude Code's own equivalent output mode.
+5. Wire backend selection via `CUTTLEFISH_AGENT_BACKEND=kopicode|claude-code`,
+   mirroring `CUTTLEFISH_SANDBOX`'s existing pattern.
+6. External rebrand: repo README, CLI branding/help text, docs cross-links
+   read as cuttlefish-crew. Python import path (`cuttlefish`) unchanged (Q30).
+7. Record ADR-0005 (supersedes ADR-0003's single-backend assumption) and
+   addenda to ADR-0001 (satay's steering primitive) and ADR-0002 (the
+   multi-tenant trigger firing) reflecting the pivot's decisions.
+
+**Demo:** the same `cuttlefish run "<task>"` delegation from V1/V2, run twice
+against the same task with `CUTTLEFISH_AGENT_BACKEND` set to each of
+`kopicode` and `claude-code` in turn, both landing a real edit through their
+own real policy/sandbox path, both producing a journal readable through the
+same `cuttlefish show` regardless of which backend ran it.
+
+**Rests on assumptions:** Q29 (headless Claude Code is the specific second
+backend chosen to prove pluggability) - if a live, credentialed Claude Code
+CLI isn't available in this build's environment, the live end-to-end path is
+named as an open gap the same way E2B's was in V2, not asserted from
+unmocked-but-credential-less tests.
+
+### Test plan
+
+#### End-to-end
+
+- The same task submitted via `CUTTLEFISH_AGENT_BACKEND=kopicode` and
+  `CUTTLEFISH_AGENT_BACKEND=claude-code` both reach a terminal state and land
+  a real edit, each through its own backend's real policy path.
+- `cuttlefish show` on a task run under either backend renders a full,
+  readable sequence with no backend-specific event type leaking into a
+  human-facing summary meant to be backend-agnostic.
+
+#### Integration
+
+- Each backend's own native output stream (kopicode's NDJSON, headless
+  Claude Code's own streaming shape) is parsed into the same
+  `DelegationOutcome` shape by its own adapter.
+- Existing sandbox routing (`CUTTLEFISH_SANDBOX=container|e2b|none`) and the
+  declared per-task policy mechanism are exercised against both backends,
+  not only kopicode.
+
+#### Unit
+
+- The `AgentBackend` Protocol is satisfied by both `KopicodeBackend` and
+  `ClaudeCodeBackend` (a structural conformance test, not just type-checking).
+- An event written by V1/V2's kopicode-specific schema still round-trips
+  through the generalized backend-agnostic schema.
+
+### Slices B-F: not yet fully planned
+
+Named and real, sketched in `docs/PLAN.md`'s Open risks and
+`docs/QUESTIONS.md` Q28-Q34, but none has its own build plan yet.
+
+- **Slice B - secrets management**: an encrypted-at-rest secrets store
+  scoped per project, injected at sandbox-creation time through the same
+  declared-policy mechanism (Q34).
+- **Slice C - multi-agent handover and steerable chat**: generalizing V1's
+  per-task handover (ADR-0004) across a team, plus external steering built
+  on satay's `wait_for_event`/`send_event` (ADR-0001's 2026-09-20 addendum,
+  satay-runtime#98/#99).
+- **Slice D - the dashboard**: a game-like pixel-art virtual office per
+  project, plus a zoomed-out portfolio view across many projects.
+- **Slice E - runners and hosting**: a registered-runner abstraction (an
+  always-on operator machine, or a cuttlefish-crew-provisioned deployment)
+  fronted by a stable URL, closing the "view a real demo without being at
+  the machine" gap. Needs satay-runtime's Postgres/multi-worker milestone
+  (satay-runtime#100) to run many projects' workflows concurrently.
+- **Slice F - meetings, explicitly last**: agent-requested or on-demand
+  meetings, TTS + an avatar presenting project status over existing
+  video-call infrastructure cuttlefish-crew facilitates rather than builds.

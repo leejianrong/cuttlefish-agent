@@ -50,6 +50,19 @@ call fails TLS verification unless one is provided - both fixed in
 known gap. Progress is tracked on the `cuttlefish-agent` Pandan board (epics
 `V1` and `V2`), both fully `done`.
 
+**A pivot is underway as of 2026-09-20**: the project is becoming
+**cuttlefish-crew**, a fleet manager running teams of coding sub-agents
+across many projects at once, not a single supervised task. `docs/PLAN.md`
+now describes this direction - slice A is a pluggable `AgentBackend`
+interface generalizing past kopicode, plus the external rebrand.
+`docs/QUESTIONS.md` Q28 onward and
+[`docs/adr/0005-agent-backend-becomes-a-pluggable-protocol.md`](docs/adr/0005-agent-backend-becomes-a-pluggable-protocol.md)
+carry the new decisions, and addenda on ADR-0001/ADR-0002 record what
+changed for satay's steering primitive and the multi-tenant trigger,
+respectively. The module list and everything else below still describes the
+V1/V2 code exactly as it exists today - read it as the foundation this pivot
+builds on, not as the current target.
+
 What each module is, in one or two lines - read its own doc comment for why,
 not this list:
 
@@ -142,7 +155,7 @@ These follow directly from the ADRs. Hold them without re-litigating them here.
 ## Pointers
 
 - [`docs/PLAN.md`](docs/PLAN.md) - problem, scope, requirements, shape
-- [`docs/adr/`](docs/adr/) - decisions of record, 0001-0004
+- [`docs/adr/`](docs/adr/) - decisions of record, 0001-0005
 - [`docs/SLICES.md`](docs/SLICES.md) - the build order and acceptance criteria
 - [`docs/QUESTIONS.md`](docs/QUESTIONS.md) - every decision, who made it, and
   where it landed

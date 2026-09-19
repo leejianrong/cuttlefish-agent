@@ -1,106 +1,175 @@
-# cuttlefish-agent: Plan
+# cuttlefish-crew: Plan
 
-Status: agreed - Milestone: MVP (slice 1)
+Status: agreed - Milestone: pivot slice A (pluggable agent backend + rename),
+first slice of the cuttlefish-crew direction. Supersedes the single-task-MVP
+framing this document held through V1/V2 (both complete, both merged to
+`main` - see `CLAUDE.md`'s Build status for that history, which stays true
+and is not being redone, only built on).
 
 ## Problem
 
-Long-running agent assistants (OpenClaw, Hermes, and their kind) run unattended for
-long stretches, but the ones available today handle memory badly. A crash loses
-whatever context wasn't checkpointed, a long session either runs out of context or
-gets summarised by hand, and nothing distills what actually worked into something
-reusable next time. The operator either babysits the agent to catch these failures,
-which defeats the point of it running unattended, or accepts that it periodically
-loses the thread.
+V1/V2 proved the mechanism this project bet on: a `@satay.workflow` core loop
+can survive a crash mid-delegation and resume correctly, and a single
+delegated coding task, gated by a real policy and (optionally) a real
+sandbox, can run unattended end to end against a live kopicode binary. That
+was the riskiest unknown, and it held up.
 
-Separately, this suite already has a coding specialist (kopicode) built and
-measured, and a durable-execution runtime (satay-runtime) built and released, but
-nothing that supervises either of them over an unattended, long-running task.
+What it didn't touch is the actual, lived pain of running coding agents day
+to day: babysitting a single agent's context window (watching it bloat, then
+manually clearing or starting a new session before it does), and babysitting
+its *output* - the UI, the demo, the actual user-facing behavior - because a
+green test suite doesn't tell you the product is right. Both of those are
+single-agent, single-project problems, and they don't go away just because
+the delegation survives a crash. Worse, they compound the moment there's more
+than one project worth running unattended at once: there's no single place
+to see what every project's agents are doing, whether any of them are stuck
+on a context ceiling, or whether what they built actually looks right,
+without being at the keyboard for each one.
 
 ## Solution
 
-An operator gives cuttlefish a task in plain language. Cuttlefish works on it, and
-if the task is a coding task, hands it to kopicode rather than attempting the edit
-itself. If the process crashes partway through, restarting it resumes exactly where
-it left off rather than starting over. Everything that happened is recorded in one
-place the operator can read afterward, not scattered across logs that don't agree
-with each other.
+cuttlefish-crew runs a small team of coding sub-agents (roughly three) per
+software project, across as many projects as the operator is running at
+once. Each project's team has functional roles (e.g. a builder, a reviewer,
+an ops/demo-checker) and a distinct personality/voice per agent, so the
+record of what happened reads as a team, not a wall of uniform log lines.
+Context handover across a long session is automatic, triggered on a
+token-budget threshold exactly like V1's existing mechanism (ADR-0004),
+generalized to run per-agent across a team instead of once per task. The
+operator oversees every project's team from one dashboard, can click into a
+running agent and steer its work directly rather than only reading its
+history, and can view a running project's actual demo/UI remotely without
+being at the machine it's running on - either through a tunnel to an
+always-on machine the operator controls, or through cuttlefish-crew
+provisioning a hosted, reachable deployment itself.
+
+This milestone (slice A) builds none of that observable surface yet. It
+builds the one thing everything else depends on: the coding sub-agent is no
+longer hardcoded to be kopicode. A generic backend interface is introduced,
+kopicode becomes its first implementation with no behavior change, and a
+second backend (headless Claude Code) is implemented against the same
+interface to prove the abstraction is real rather than aspirational -
+directly motivated by the fact that Claude Code, not kopicode, is the agent
+the operator actually babysits today.
 
 ## Users and actors
 
-- **The operator** (primary). The person who runs cuttlefish, configures what it's
-  allowed to delegate, and holds the credentials it uses. Their trust boundary is
-  final: nothing a submitted task asks for reaches further than what the operator
-  already configured.
-- **External tools and other agents** (secondary). They can submit tasks through
-  the same CLI surface a human would use. They are not a distinct trust tier in the
-  MVP - see ADR-0002's trust model - and get exactly the access the operator's
-  running configuration grants, no more.
-- **kopicode** (a dependency, not a user). The specialist cuttlefish delegates
-  coding subtasks to, over its own existing headless interface (ADR-0003).
+- **The operator** (primary). Runs cuttlefish-crew, configures which
+  projects it oversees and what each project's team may delegate, and holds
+  the credentials it uses. Was the sole intended user through V1/V2; this
+  project is now explicitly meant to grow toward other operators running
+  their own teams, which is a real scope expansion Q28 and ADR-0002's
+  2026-09-20 addendum need to reckon with (multi-tenancy, isolation
+  between operators), not something this milestone builds.
+- **A project's sub-agent team** (new framing, not built this milestone).
+  Roughly three agents per project, each with a functional role and a
+  personality. Not a distinct trust tier from the operator's own
+  configuration - same posture ADR-0002/Q23 already established for a
+  single delegation, extended to a team.
+- **A coding agent backend** (a dependency, pluggable). kopicode remains the
+  reference implementation; a second, headless-Claude-Code-backed
+  implementation is this milestone's proof that the interface isn't shaped
+  around kopicode by accident. Neither backend is a distinct trust tier;
+  both run inside whatever sandbox/policy the operator's configuration
+  already grants (ADR-0002, KAN-987's descendant policy mechanism).
+- **satay-runtime** (a co-evolving dependency, not a fixed one, as of
+  2026-09-20). Previously treated as an external library this project
+  tracked at a pinned version and worked around. The operator has since said
+  satay's own roadmap should now be driven by cuttlefish-crew's needs -
+  concrete asks are filed as satay-runtime issues, not worked around inside
+  this repo. See Open risks.
+- **Runners** (named here, not built until a later slice). A place that can
+  run a project's deployment and expose it - the operator's own machine, a
+  homelab box, or eventually cuttlefish-crew-provisioned compute. Out of
+  scope for this milestone entirely; named so the backend interface this
+  milestone builds doesn't accidentally foreclose it.
 
 ## Scope
 
 **In this milestone.**
 
-- One trigger surface: a CLI (`cuttlefish run "<task>"`), blocking until the task
-  reaches a terminal state.
-- The core loop as a `@satay.workflow` from the first line, with every LLM call and
-  every kopicode delegation as a `@satay.task` (ADR-0001).
-- Episodic memory: a durable, tagged-union event log in its own SQLite store, with
-  write-time secret redaction (ADR-0004).
-- Working memory: context-budget tracking and an automatic handover derived fresh
-  from the episodic record at a threshold, never a hand-maintained document
-  (ADR-0004).
-- One delegation path to kopicode, gated by a hardcoded, narrow allowlist rather
-  than a general policy mechanism (ADR-0003).
-- Crash recovery: killing the process mid-task and restarting resumes correctly,
-  without re-running a delegation that already completed.
+- A generic `AgentBackend` interface that a coding delegation runs through,
+  replacing today's kopicode-hardcoded call site inside `cuttlefish.delegate`.
+- `kopicode` reimplemented as one `AgentBackend` implementation, with zero
+  behavior regression from V1/V2 - the same NDJSON parsing, the same policy
+  file generation, the same sandbox routing, now living behind the interface
+  instead of being the only thing that exists.
+- A second `AgentBackend` implementation wrapping headless Claude Code,
+  capable of running at least one real delegation end to end, proving the
+  interface generalizes past kopicode's own shape.
+- A backend-agnostic episodic event representation for a delegation outcome,
+  forward-compatible with events V1/V2 already wrote (ADR-0004's
+  unmarshalling discipline - an unrecognized or superseded event shape still
+  round-trips, it isn't dropped).
+- The external rebrand: repository name, README, CLI branding/help text, and
+  docs cross-links read as **cuttlefish-crew**. The Python package import
+  path (`cuttlefish`, `src/cuttlefish`, `pyproject.toml`'s `name =
+  "cuttlefish"`) is unchanged (Q30).
+- Superseding or amending ADRs for ADR-0002 (the product-ambition trigger it
+  named has now fired) and ADR-0003 ("no new protocol, wrap kopicode as it
+  exists" - now extended to "no new protocol *between* backends either," but
+  the single-protocol assumption itself is superseded), recorded rather than
+  left silently stale.
 
 **Out.**
 
-- Chat or webhook trigger surfaces. The CLI is the only way in; anything else is a
-  second surface this milestone doesn't need to prove the mechanism works.
-- Procedural memory (skill distillation) and semantic memory. Named in ADR-0004,
-  built by nobody here.
-- A general, declarative permission policy for the kopicode delegation. The MVP's
-  allowlist is hardcoded on purpose - the general form generalises once there's a
-  second real policy to compare it against, the same discipline kopicode's own
-  ADR-0005 already uses for its harness configuration axes.
-- Real sandbox containment around the delegation (ADR-0002). Slice 1 accepts the
-  same risk kopicode's own ADR-0008 accepts, for the same reason: one operator,
-  their own task, their own machine.
-- Any second delegation target beyond kopicode, and any multi-agent orchestration
-  beyond the one supervisor/one specialist relationship. This milestone proves one
-  delegation, not a swarm.
-- cuttlefish-crate, or any spun-out sandbox product (ADR-0002). It doesn't exist
-  until there's a second real consumer or a concrete reason to differentiate.
-- A clarifying-question loop back to the operator when a task is ambiguous
-  (Q18). The CLI's operator is present in principle, but this is genuinely
-  additional scope past what the MVP needs to prove.
+- Project/agent-scoped secrets management (slice B, new since this
+  milestone was first scoped - see Q34): an encrypted-at-rest secrets store,
+  scoped per project (and optionally shared across projects), injected into
+  a sandbox/backend at creation time through the same declared-policy
+  mechanism already gating command/path access. Not built this milestone -
+  slice A's own second-backend testing still gets its one real credential
+  via today's ad hoc env-var handling, same as V1/V2 always have.
+- Automated context handover redesigned for a multi-agent team (slice C, was
+  B). V1's existing per-task handover (ADR-0004) keeps working unmodified;
+  making it work sensibly across three agents sharing or diverging on
+  context is explicitly a later slice's problem, not this one's.
+- Steerable chat - a human redirecting a running agent's work mid-task.
+  Confirmed buildable on satay's existing `wait_for_event`/`send_event`
+  primitive (see Open risks), but the workflow-shape work to actually use it
+  is slice C.
+- Any dashboard, office visualization, or UI of any kind (slice D, was C).
+  This milestone has no observable surface beyond the existing CLI.
+- The runner/hosting abstraction and remote demo viewing (slice E, was D).
+- Actually running more than one project's delegation at a time, or any
+  scheduling/job-queue work that implies. This milestone still proves the
+  backend abstraction on the same one-task-at-a-time shape V1/V2 already
+  have; "many projects, many teams, concurrently" is slice C/D's problem and,
+  underneath that, satay-runtime's own multi-worker milestone (see Open
+  risks).
+- The meetings-with-avatar feature. Explicitly deferred to last, after
+  everything else in this roadmap, by the operator's own instruction.
+- Any actual multi-tenancy, auth, or isolation-between-operators
+  implementation. "Building toward a product" is a design constraint
+  ADR-0002's 2026-09-20 addendum has to acknowledge, not something built in
+  code yet.
+- Any change to satay-runtime's own codebase. This milestone's backend
+  abstraction doesn't need new satay capability; where a later slice will,
+  it's filed as a satay-runtime issue for that project's own roadmap, not
+  built inside this repo.
 
 ## Requirements
 
 | ID | Requirement | Status |
 |----|-------------|--------|
-| R0 | Given one real task, run it to a terminal state unattended, and produce a readable record of what happened. | Core goal |
-| R1 | Survive a killed process: resuming after a crash reaches the same terminal state without re-running a delegation that already completed. | Must-have |
-| R2 | Delegate at least one real coding subtask to kopicode successfully, over kopicode's existing headless interface. | Must-have |
-| R3 | Track context usage during a task and produce an automatic handover at a threshold, derived from the episodic record rather than hand-maintained. | Must-have |
-| R4 | Never lose or silently truncate a tool result or a model reply; everything a person reads back is derived from the episodic log, not a parallel transcript. | Must-have |
-| R5 | Redact known secret values from the episodic log at write time. | Must-have |
-| R6 | Refuse a delegation request that isn't on the configured allowlist, the same fail-closed posture kopicode's own permission gate uses. | Must-have |
-| R7 | A second task submitted while one is running queues rather than being rejected or silently dropped. | Nice-to-have |
+| R0 | A coding subtask is delegated through a generic `AgentBackend` interface, not a kopicode-hardcoded call site. | Core goal |
+| R1 | kopicode continues to work exactly as it does today behind the new interface - same NDJSON parsing, same policy file generation, same sandbox routing - zero behavior regression from V1/V2. | Must-have |
+| R2 | A second backend (headless Claude Code) is implemented against the same interface and completes at least one real delegation end to end. | Must-have |
+| R3 | The episodic event schema represents a backend-agnostic delegation outcome, forward-compatible with events V1/V2 already wrote. | Must-have |
+| R4 | The repo/product's external surface (README, CLI help text/branding, docs cross-links) reads as cuttlefish-crew; the Python package import path (`cuttlefish`) is unchanged. | Must-have |
+| R5 | ADR-0002 and ADR-0003 have superseding or amending ADRs recorded reflecting the pluggable-backend and product-ambition decisions. | Must-have |
+| R6 | Existing sandbox routing (`CUTTLEFISH_SANDBOX=container\|e2b\|none`) and the declared per-task policy mechanism work per-backend, not only for kopicode. | Must-have |
 
 ## Shape
 
 | Part | Mechanism | ADR |
 |------|-----------|-----|
-| S1 | `@satay.workflow` core loop; every provider call and every kopicode delegation is a `@satay.task` | ADR-0001 |
-| S2 | Kopicode delegation: a `side_effect=True` satay task shelling out to `kopicode run --print`, parsing its NDJSON stream, gated by kopicode's forthcoming ADR-0011 policy (kopicode board KAN-987) | ADR-0003 |
-| S3 | Episodic journal: tagged-union events in `.cuttlefish/episodic.db` (SQLite), never truncated, versioned from the first commit, redacted at write time | ADR-0004 |
-| S4 | Working-memory handover: triggered at a token-budget threshold, one bounded LLM call over the recent episodic window, written back as an episodic event | ADR-0004 |
-| S5 | `LlmProvider` seam for cuttlefish's own reasoning calls: a keyless `replay` provider for tests, a real provider (Claude or an OpenAI-compatible endpoint) for actual runs | - |
-| S6 | Sandbox provider interface (create/exec/snapshot/destroy), defined but not implemented in this milestone | ADR-0002 |
+| S1 | `AgentBackend` protocol (invoke, parse its own native stream into one `DelegationOutcome`, declare/accept a policy file) replacing the kopicode-specific call inside `cuttlefish.delegate` | forthcoming, supersedes ADR-0003 |
+| S2 | `KopicodeBackend` - today's delegation logic moved behind the interface, behavior preserved byte for byte | ADR-0003 (superseded), forthcoming |
+| S3 | `ClaudeCodeBackend` - headless Claude Code wrapped the same way, proving the interface isn't kopicode-shaped by accident | forthcoming |
+| S4 | Backend-agnostic episodic event types for a delegation outcome, versioned per ADR-0004's forward-compatible unmarshalling | ADR-0004 |
+| S5 | External rebrand: repo name, README, CLI branding/help text, docs cross-links -> cuttlefish-crew; package import path (`cuttlefish`) unchanged | - |
+| S6 | An addendum to ADR-0002 (the multi-tenant trigger it named has fired) and a superseding ADR-0005 for ADR-0003 (multi-backend delegation) | ADR-0002 addendum, ADR-0005 |
 
 ## Affordances
 
@@ -108,76 +177,102 @@ with each other.
 
 | Affordance | Kind | Wires to |
 |------------|------|----------|
-| `cuttlefish run "<task>"` | CLI command | Opens a satay app, starts the task workflow, blocks for a terminal state, prints a JSON result |
-| `cuttlefish show <task-id>` | CLI command | Reads the episodic journal for one task and renders it for a person |
-| Delegation task | Internal satay task | Shells out to `kopicode run --print`, parses its event stream |
-| Episodic journal | Local store | Every workflow and task boundary appends a typed event |
-
-There is no UI in this milestone. The CLI's JSON output and `show` command are the
-whole surface a person or another tool has to reason over.
+| `CUTTLEFISH_AGENT_BACKEND=kopicode\|claude-code` | Config | Selects which `AgentBackend` implementation the delegation task routes through, the same pattern `CUTTLEFISH_SANDBOX` already established |
+| `cuttlefish run "<task>"` / `cuttlefish show <task-id>` | CLI commands | Unchanged in shape this milestone - the dashboard is slice C, not this one |
 
 ## Implementation decisions
 
-The workflow, its tasks, and the episodic journal are three separate concerns and
-stay that way: satay owns replay identity and crash recovery (ADR-0001), the
-episodic store owns the human-readable record of what happened (ADR-0004), and
-neither substitutes for the other. A task's ID is the satay run ID it gets on
-start; there is no second identity scheme (Q6).
+The interface's job is to normalize every backend's outcome to the one
+`DelegationOutcome` shape this project already defines, not to invent a
+shared wire format between backends. Each backend keeps speaking its own
+native CLI language (kopicode's NDJSON stream over `run --print`, whatever
+headless Claude Code's own streaming shape turns out to be) - this extends
+ADR-0003's original "no new protocol" discipline rather than abandoning it:
+there's still no new protocol invented *for* any given backend, there's just
+now more than one backend cuttlefish-crew knows how to talk to.
 
-The delegation task's failure handling is plain: a failed or refused delegation is
-caught, written as a typed episodic event, and returned to the operator as a real
-failure. It is not silently retried, and a missing kopicode binary on PATH is
-checked at startup rather than discovered mid-task (Q16, Q17).
+Sandbox routing and the declared per-task policy mechanism already live one
+layer above any specific backend (`cuttlefish.sandbox`, `cuttlefish.tasks.
+delegate`). Making them work per-backend should be an additive parameter to
+that existing plumbing, not a fork of it - a second sandbox backend was
+already added this way in V2 (ADR-0002's 2026-08-26 addendum), and a second
+agent backend should follow the identical shape: one more implementation of
+an interface this project already owns.
 
-Concurrency in this milestone is sequential, not by choice but by inheritance: 
-satay-runtime is one process, one writer, with no multi-worker execution yet. A
-second submission queues in-process (Q8, R7).
+Backend heterogeneity is real and shouldn't be hidden: kopicode's policy
+gate (KAN-987's descendant) is purpose-built and mature; headless Claude
+Code's own permission model won't necessarily map onto the same declared-
+allowlist shape. The interface should surface that difference honestly
+(e.g. a backend reports what containment/policy guarantees it can actually
+make) rather than force every backend to pretend to the same guarantees
+kopicode happens to provide.
 
 ## Testing approach
 
-The primary seam is the workflow's public entry point, driven with satay's own
-testing primitives: a `ManualClock`, a seeded RNG where needed, and its
-`FaultInjector` to kill the process after a chosen journal event and assert that
-resuming reaches the same terminal state without a duplicated delegation. That is
-the same seam satay itself is tested through, and it is the one seam that actually
-answers "did this behave correctly," rather than which internal function ran.
-
-The kopicode delegation is tested against kopicode's own headless surface directly
-(no mock kopicode), because the contract that matters is what `run --print`
-actually emits, not an assumption about it. Both paths are exercisable now that
-kopicode board KAN-987 has landed: the refusal-handling path against an
-unconfigured `run --print` (still `denyHeadless` by default, unchanged), and the
-"successfully edits a file" path against `run --print --policy-file`, per
-ADR-0002's addendum.
+Same discipline V1/V2 already hold: test against real binaries, not mocks,
+for whichever backends have a real credential and binary available in the
+build environment. If headless Claude Code isn't available as a live,
+credentialed binary in this build's environment the way E2B wasn't in V2,
+say so plainly rather than asserting the path from unmocked-but-credential-
+less tests - unit- and integration-test the backend against its documented
+contract, and name the live end-to-end path as an open gap until it's
+actually run, the same honesty V2's `CLAUDE.md` entry already models for
+E2B.
 
 ## Assumed defaults
 
 | ID | Assumed | Cost if wrong |
 |----|---------|---------------|
-| Q6 | Task ID is the satay run ID. | Small - a second identity field is additive if a task ever needs to be identified independently of any run. |
-| Q7 | Episodic memory is its own SQLite store, never inside satay's own database. | Medium - migrating an established store's location later means a one-time data move, not a schema rewrite. |
-| Q9 | The CLI blocks until a terminal state; there is no daemon mode yet. | Medium - a non-blocking `serve` mode is additive, not a redesign, since the workflow itself doesn't change. |
-| Q11 | `LlmProvider` mirrors sibei-flow's own seam exactly. | Small - the interface is narrow and already proven in a sibling repo. |
-| Q18 | No clarifying-question loop back to the operator in v1. | Medium - a stuck task just fails or does its best rather than pausing to ask, which is a real capability gap, not just a rough edge. |
-| Q20 | Linux and macOS first-class, Windows best-effort, matching satay-runtime exactly. | Small - this project can never be more portable than the runtime underneath it. |
+| Q29 | The second backend proving pluggability is headless Claude Code, not a third tool. | Small - the interface doesn't care which second implementation proves it; swapping which tool goes second is additive. |
+| Q30 | The Python package import path stays `cuttlefish` while the repo/product/CLI branding become cuttlefish-crew externally. | Small now; if this project is ever published as an installable library under its own name, an import-path/product-name mismatch could confuse a new contributor - accepted for now, revisit if that happens. |
 
 ## Open risks
 
-- **kopicode board KAN-987 landed (2026-08-23, kopicode PR #109)**, sooner than
-  this plan expected. R2 and R6 can now be demonstrated beyond the read-only
-  case. It shipped with a condition this plan didn't anticipate: kopicode
-  ADR-0011 decision 4 asks the invoking orchestrator to provide containment
-  for any policy-gated invocation, naming cuttlefish's own (not-yet-built)
-  sandbox as the obligated party. Slice 1 uses the policy gate anyway, without
-  the sandbox, as a deliberate, named exception on ADR-0002's existing
-  trust-model reasoning - see that ADR's addendum and QUESTIONS.md Q25.
-- **This project is satay-runtime's first real external consumer.** Nobody else in
-  this suite has actually depended on satay as a library yet (sibei-flow's own port
-  was deferred). Some of what breaks in slice 1 will be gaps in satay's own public
-  surface, discovered here first, not bugs in this repository. The earliest slice
-  is exactly where this would show up, which is the right place for it to.
-- **Working memory's summarisation quality is unverified until real, long sessions
-  exist.** A bounded LLM call distilling a journal window is a reasonable design,
-  but whether the resulting handover is actually useful for continuing a task is
-  an empirical question slice 1's own long-running test has to answer, not
-  something this plan can settle on paper.
+- **satay-runtime is no longer treated as a fixed external dependency.** As
+  of 2026-09-20 the operator has said satay's own roadmap should be driven
+  by cuttlefish-crew's needs going forward. Three concrete asks are already
+  filed against it rather than worked around here: satay-runtime#98 (a live
+  query primitive for in-progress workflow state), satay-runtime#99
+  (document/example the `wait_for_event`/`send_event` pattern for external
+  steering), and satay-runtime#100 (prioritize the Postgres Store +
+  multi-worker milestone ADR-0025 already earmarks). None of these block
+  this milestone; slice B needs #98/#99, and "many projects concurrently"
+  eventually needs #100.
+- **This milestone is the first of a much larger pivot** that isn't fully
+  written down yet. Slice B (project/agent-scoped secrets management - an
+  encrypted-at-rest store, policy-driven injection at sandbox-creation time,
+  no credential broker/proxy yet), slice C (multi-agent handover + steerable
+  chat), slice D (a dashboard, sketched as a game-like pixel-art virtual
+  office with a zoomed-out portfolio view for scale), slice E (the
+  runner/hosting abstraction unifying "tunnel to an always-on machine" and
+  "cuttlefish-crew provisions a hosted deployment itself"), and a deferred,
+  explicitly-last slice F (agent-initiated meetings, TTS + avatar,
+  facilitated through existing video-call infrastructure rather than built
+  from scratch) are all real, discussed, and intended - just not yet in
+  `docs/SLICES.md`. Treat this document as the current vision anchor until
+  that catches up, not as evidence the roadmap ends at slice A. Slice B was
+  inserted after this milestone was first scoped, once it became clear that
+  multiple projects each needing distinct, isolated credentials is a slice-A
+  -adjacent pain, not a slice-E-hosting-only one (Q34).
+- **The product-ambition decision fires one of ADR-0002's two named
+  triggers, not the one about spinning the sandbox out as its own
+  product.** ADR-0002 named two independent triggers: whether the sandbox
+  becomes a separate product (ungated - no second real consumer of the
+  interface itself exists, so this stays internal), and whether real
+  containment is *necessary* (gated on multi-tenant exposure or untrusted
+  task input). The operator has now said cuttlefish-crew is being built
+  toward a product for other operators, not only personal use - that's the
+  second trigger firing for real, addressed in ADR-0002's 2026-09-20
+  addendum. It doesn't add new containment work (V2 already built real
+  sandboxing before this trigger fired, for a different reason); it means
+  the "one operator, their own machine" trust-model framing ADR-0002 uses
+  throughout stops being the operating assumption, and isolation *between*
+  operators becomes a real design question for whichever slice builds
+  multi-operator hosting (slice E).
+- **Backend heterogeneity may surface a real capability gap, not just an
+  interface-design question.** If headless Claude Code (or any future
+  backend) can't make the same containment/policy guarantees kopicode's
+  KAN-987 gate makes, R6 may not be satisfiable uniformly across backends -
+  an honest per-backend capability report, not a forced uniform contract, is
+  the planned answer, but this is unverified until a second backend is
+  actually built against a real policy requirement.
