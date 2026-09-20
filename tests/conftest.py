@@ -5,13 +5,14 @@ Registers satay's own testing fixtures (``ManualClock``, ``SeededRng``,
 test suite is driven through (docs/PLAN.md "Testing approach").
 
 Also implements the ``requires_kopicode``, ``requires_live_credential``,
-``requires_e2b_credential``, and ``requires_docker`` markers (all declared in
-pyproject.toml): the kopicode delegation is tested against kopicode's own
-headless surface directly, never a mock, so a test needing the real binary or
-a real model credential skips itself, rather than fails, when either is
-missing — CI's separate ``kopicode-integration`` job builds the binary but has
-no live credential, so ``requires_live_credential`` tests skip there too; both
-run locally once ``.env`` (or the shell) has a real key. ``requires_e2b_credential``
+``requires_e2b_credential``, ``requires_docker``, ``requires_claude_code``,
+and ``requires_claude_code_live`` markers (all declared in pyproject.toml):
+the kopicode delegation is tested against kopicode's own headless surface
+directly, never a mock, so a test needing the real binary or a real model
+credential skips itself, rather than fails, when either is missing — CI's
+separate ``kopicode-integration`` job builds the binary but has no live
+credential, so ``requires_live_credential`` tests skip there too; both run
+locally once ``.env`` (or the shell) has a real key. ``requires_e2b_credential``
 is never run in CI at all (docs/SLICES.md V2 test plan, the same cost-bearing
 posture kopicode's own ``make bench`` takes) — it only runs locally, and only
 once an operator has deliberately set a real ``E2B_API_KEY``.
@@ -19,6 +20,19 @@ once an operator has deliberately set a real ``E2B_API_KEY``.
 2026-08-26 addendum) — it self-skips only on a host with no local Docker
 daemon, which GitHub's own `ubuntu-latest` CI runners already have, so those
 tests run for real there too, unlike the E2B ones.
+
+``requires_claude_code`` (ADR-0005) mirrors ``requires_kopicode``: free,
+binary-on-PATH only, so CI (which never installs `claude`) skips it the same
+way it skips a missing kopicode. ``requires_claude_code_live`` is different in
+kind from every other credential marker here: Claude Code's own headless
+auth can be an OAuth session with no environment variable to detect at all
+(verified live, 2026-09-20 — this build's own `claude` authenticates with no
+`ANTHROPIC_API_KEY` set), so presence can't be inferred the way
+``requires_live_credential``/``requires_e2b_credential`` infer it from an env
+var. It costs real money on every run once enabled, the same posture
+``requires_e2b_credential`` takes, so it is never inferred from environment
+state at all — only ``CUTTLEFISH_TEST_CLAUDE_CODE_LIVE=1``, set deliberately,
+turns it on.
 
 ``load_dotenv()`` runs once here, at collection time, for the same reason
 ``cli.py`` loads it once at import rather than per call: a test file that only
@@ -59,6 +73,14 @@ def pytest_collection_modifyitems(items: Sequence[pytest.Item]) -> None:
     skip_docker = pytest.mark.skip(reason="no docker binary on PATH")
     has_docker = shutil.which("docker") is not None
 
+    skip_claude_code = pytest.mark.skip(reason="claude is not on PATH (ADR-0005)")
+    has_claude_code = shutil.which("claude") is not None
+
+    skip_claude_code_live = pytest.mark.skip(
+        reason="CUTTLEFISH_TEST_CLAUDE_CODE_LIVE=1 not set -- costs real money, opt-in only"
+    )
+    claude_code_live_enabled = os.environ.get("CUTTLEFISH_TEST_CLAUDE_CODE_LIVE") == "1"
+
     for item in items:
         if not has_kopicode and item.get_closest_marker("requires_kopicode") is not None:
             item.add_marker(skip_kopicode)
@@ -69,3 +91,8 @@ def pytest_collection_modifyitems(items: Sequence[pytest.Item]) -> None:
             item.add_marker(skip_e2b)
         if not has_docker and item.get_closest_marker("requires_docker") is not None:
             item.add_marker(skip_docker)
+        if not has_claude_code and item.get_closest_marker("requires_claude_code") is not None:
+            item.add_marker(skip_claude_code)
+        claude_live_marker = item.get_closest_marker("requires_claude_code_live")
+        if not claude_code_live_enabled and claude_live_marker is not None:
+            item.add_marker(skip_claude_code_live)

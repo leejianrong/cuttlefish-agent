@@ -57,7 +57,7 @@ class LlmCallFailed:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class DelegationStarted:
-    """A coding subtask is about to be handed to kopicode (ADR-0003)."""
+    """A coding subtask is about to be handed to a coding-agent backend (ADR-0003, ADR-0005)."""
 
     EVENT_TYPE: ClassVar[str] = "DelegationStarted"
 
@@ -73,6 +73,10 @@ class DelegationStarted:
     # the backend's own name ("container", "e2b"), not an opaque flag, so the
     # journal itself says what actually ran the delegation.
     sandbox: str | None = None
+    # Which AgentBackend actually ran this delegation (ADR-0005) — "kopicode" by
+    # default so a V1/V2 event written before the backend became pluggable still
+    # decodes to the only backend that existed then, not an empty/unknown value.
+    backend: str = "kopicode"
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

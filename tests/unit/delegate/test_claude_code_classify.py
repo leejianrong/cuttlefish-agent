@@ -1,0 +1,123 @@
+"""Unit tests for classify_stream's own decision logic (cuttlefish.delegate.claude_code).
+
+Synthetic, representative stream-json event sequences shaped exactly like what
+was verified against the real `claude` binary (2026-09-20, claude 2.1.278) --
+fair game to unit test, since this is cuttlefish's own reduction logic, not a
+claim about what Claude Code emits in general. See that module's docstring
+for the probes this shape came from.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from cuttlefish.agents.outcome import DelegationError
+from cuttlefish.delegate.claude_code import classify_stream
+
+
+def _assistant_text(text: str) -> dict[str, object]:
+    return {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}
+
+
+def _assistant_tool_use(name: str, file_path: str) -> dict[str, object]:
+    return {
+        "type": "assistant",
+        "message": {
+            "content": [{"type": "tool_use", "name": name, "input": {"file_path": file_path}}]
+        },
+    }
+
+
+def _result(**overrides: object) -> dict[str, object]:
+    base: dict[str, object] = {
+        "type": "result",
+        "is_error": False,
+        "subtype": "success",
+        "result": "done",
+        "permission_denials": [],
+    }
+    base.update(overrides)
+    return base
+
+
+def test_a_write_tool_use_is_a_completed_edit() -> None:
+    outcome = classify_stream(
+        [
+            _assistant_tool_use("Write", "hello.txt"),
+            _assistant_text("Created hello.txt"),
+            _result(result="Created hello.txt"),
+        ]
+    )
+    assert outcome.kind == "completed"
+    assert outcome.edited_paths == ["hello.txt"]
+
+
+def test_multiple_edits_are_all_recorded_without_duplicates() -> None:
+    outcome = classify_stream(
+        [
+            _assistant_tool_use("Write", "a.py"),
+            _assistant_tool_use("Edit", "b.py"),
+            _assistant_tool_use("Edit", "a.py"),  # a second edit to the same file
+            _result(),
+        ]
+    )
+    assert outcome.kind == "completed"
+    assert outcome.edited_paths == ["a.py", "b.py"]
+
+
+def test_a_permission_denial_is_refused_even_though_is_error_is_false() -> None:
+    # Verified live: a fully denied session still reports is_error=false,
+    # subtype="success" -- permission_denials is the only reliable signal.
+    outcome = classify_stream(
+        [
+            _assistant_tool_use("Write", "hello.txt"),
+            _result(
+                permission_denials=[
+                    {
+                        "tool_name": "Write",
+                        "tool_use_id": "toolu_1",
+                        "tool_input": {"file_path": "hello.txt", "content": "hi"},
+                    }
+                ]
+            ),
+        ]
+    )
+    assert outcome.kind == "refused"
+    assert outcome.reason == "Write denied"
+
+
+def test_a_clean_finish_with_nothing_to_do_is_completed() -> None:
+    outcome = classify_stream([_assistant_text("Nothing to change here."), _result()])
+    assert outcome.kind == "completed"
+    assert outcome.edited_paths == []
+
+
+def test_is_error_with_no_denial_is_failed() -> None:
+    outcome = classify_stream(
+        [_result(is_error=True, subtype="error_max_turns", result="ran out of turns")]
+    )
+    assert outcome.kind == "failed"
+    assert outcome.reason == "ran out of turns"
+
+
+def test_a_stream_with_no_result_event_raises() -> None:
+    with pytest.raises(DelegationError):
+        classify_stream([_assistant_text("hi")])
+
+
+def test_an_absolute_edited_path_is_relativized_against_root() -> None:
+    # Verified live (2026-09-20): Write/Edit tool_use blocks report an
+    # *absolute* file_path, unlike kopicode's own relative edit_applied.path.
+    outcome = classify_stream(
+        [_assistant_tool_use("Write", "/scratch/project/hello.txt"), _result()],
+        root="/scratch/project",
+    )
+    assert outcome.edited_paths == ["hello.txt"]
+
+
+def test_an_edited_path_outside_root_is_kept_absolute_rather_than_raising() -> None:
+    outcome = classify_stream(
+        [_assistant_tool_use("Write", "/somewhere/else/hello.txt"), _result()],
+        root="/scratch/project",
+    )
+    assert outcome.edited_paths == ["/somewhere/else/hello.txt"]

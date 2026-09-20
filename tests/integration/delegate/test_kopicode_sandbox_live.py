@@ -26,7 +26,7 @@ from cuttlefish.episodic.events import DelegationStarted, TaskCompleted
 from cuttlefish.episodic.store import EpisodicStore
 from cuttlefish.llm.replay import ReplayLlmProvider
 from cuttlefish.sandbox.container import ContainerSandboxProvider
-from cuttlefish.tasks.delegate import delegate_to_kopicode
+from cuttlefish.tasks.delegate import delegate_to_agent_backend
 from cuttlefish.workflow import run_task
 
 
@@ -99,7 +99,7 @@ async def test_a_real_write_lands_through_the_container_sandbox(tmp_path: Path) 
 
 @pytest.mark.requires_kopicode
 @pytest.mark.requires_docker
-async def test_delegate_to_kopicode_forwards_the_kopicode_credential_into_the_sandbox(
+async def test_delegate_to_agent_backend_forwards_the_kopicode_credential_into_the_sandbox(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A container does not inherit the host's environment -- without this, a
@@ -126,7 +126,7 @@ async def test_delegate_to_kopicode_forwards_the_kopicode_credential_into_the_sa
     root = tmp_path / "scratch"
     root.mkdir()
 
-    outcome = await delegate_to_kopicode("add a .gitignore entry", str(root))
+    outcome = await delegate_to_agent_backend("add a .gitignore entry", str(root))
 
     assert outcome.kind == "failed"
     assert "OPENROUTER_API_KEY is not set" not in (outcome.reason or "")

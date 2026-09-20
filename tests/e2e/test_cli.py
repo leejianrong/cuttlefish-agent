@@ -83,6 +83,36 @@ def test_missing_kopicode_binary_is_a_config_error(
     assert "not on PATH" in capsys.readouterr().err
 
 
+def test_missing_claude_code_binary_is_a_config_error_only_when_that_backend_is_selected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """ADR-0005: selecting a backend that isn't on PATH fails closed at startup
+    (Q17), the same as kopicode's own missing-binary check -- and a missing
+    claude binary is *not* checked at all when kopicode is the configured
+    backend (the default), proving the two checks are actually independent.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CUTTLEFISH_AGENT_BACKEND", "claude-code")
+    monkeypatch.setenv("CUTTLEFISH_CLAUDE_CODE_BIN", "claude-binary-that-does-not-exist")
+
+    exit_code = cli.main(["run", "add a .gitignore entry"])
+
+    assert exit_code == cli.EXIT_CONFIG_ERROR
+    assert "not on PATH" in capsys.readouterr().err
+
+
+def test_an_unknown_agent_backend_is_a_config_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CUTTLEFISH_AGENT_BACKEND", "not-a-real-backend")
+
+    exit_code = cli.main(["run", "add a .gitignore entry"])
+
+    assert exit_code == cli.EXIT_CONFIG_ERROR
+    assert "unknown CUTTLEFISH_AGENT_BACKEND" in capsys.readouterr().err
+
+
 def test_show_on_an_unknown_task_is_a_clear_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

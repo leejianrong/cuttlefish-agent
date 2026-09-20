@@ -15,7 +15,7 @@ from typing import Any, NotRequired, TypedDict
 import satay
 
 from cuttlefish import runtime
-from cuttlefish.delegate.kopicode import DelegationError
+from cuttlefish.agents.outcome import DelegationError
 from cuttlefish.delegate.policy import DEFAULT_SHELL_ALLOWLIST
 from cuttlefish.episodic.events import (
     DelegationCompleted,
@@ -27,7 +27,7 @@ from cuttlefish.episodic.events import (
     TaskSubmitted,
 )
 from cuttlefish.handover import DEFAULT_TOKEN_BUDGET, maybe_handover
-from cuttlefish.tasks.delegate import delegate_to_kopicode
+from cuttlefish.tasks.delegate import delegate_to_agent_backend
 from cuttlefish.tasks.journal import journal
 
 
@@ -68,19 +68,27 @@ async def run_task(task_input: TaskInput) -> dict[str, Any]:
     await journal(task_id, TaskSubmitted(text=text))
     await maybe_handover(task_id, token_budget=token_budget)
 
-    # Every delegation now runs behind kopicode's declared-allowlist policy gate
-    # (KAN-987, ADR-0002's addendum) -- this records what was actually declared
-    # for this task (KAN-1011), and which sandbox backend (if any) actually ran
-    # it (KAN-1010) -- not just what was asked.
-    sandbox_provider = runtime.current().sandbox_provider
+    # Every delegation now runs behind its own backend's declared-allowlist
+    # policy gate (KAN-987, ADR-0002's addendum) -- this records what was
+    # actually declared for this task (KAN-1011), which agent backend ran it
+    # (ADR-0005), and which sandbox backend (if any) actually ran it
+    # (KAN-1010) -- not just what was asked.
+    runtime_ = runtime.current()
+    sandbox_provider = runtime_.sandbox_provider
     sandbox_name = sandbox_provider.BACKEND_NAME if sandbox_provider is not None else None
     await journal(
         task_id,
-        DelegationStarted(task_text=text, root=root, policy_allow=allow, sandbox=sandbox_name),
+        DelegationStarted(
+            task_text=text,
+            root=root,
+            policy_allow=allow,
+            sandbox=sandbox_name,
+            backend=runtime_.agent_backend,
+        ),
     )
 
     try:
-        outcome = await delegate_to_kopicode(text, root, allow=allow)
+        outcome = await delegate_to_agent_backend(text, root, allow=allow)
     except DelegationError as exc:
         # A plain (non-collected) awaited task's failure re-raises the task body's
         # own exception type unchanged — satay.TaskFailedError only wraps a

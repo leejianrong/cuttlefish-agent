@@ -43,6 +43,10 @@ EXIT_WORKFLOW_ERROR = 3
 
 KOPICODE_BIN_ENV = "CUTTLEFISH_KOPICODE_BIN"
 DEFAULT_KOPICODE_BIN = "kopicode"
+CLAUDE_CODE_BIN_ENV = "CUTTLEFISH_CLAUDE_CODE_BIN"
+DEFAULT_CLAUDE_CODE_BIN = "claude"
+AGENT_BACKEND_ENV = "CUTTLEFISH_AGENT_BACKEND"
+DEFAULT_AGENT_BACKEND = "kopicode"
 LLM_PROVIDER_ENV = "CUTTLEFISH_LLM_PROVIDER"
 DEFAULT_LLM_PROVIDER = "openrouter"
 SANDBOX_ENV = "CUTTLEFISH_SANDBOX"
@@ -57,13 +61,27 @@ def _resolve_kopicode_binary() -> str:
     return os.environ.get(KOPICODE_BIN_ENV, DEFAULT_KOPICODE_BIN)
 
 
-def _check_kopicode_on_path(binary: str) -> None:
+def _resolve_claude_code_binary() -> str:
+    return os.environ.get(CLAUDE_CODE_BIN_ENV, DEFAULT_CLAUDE_CODE_BIN)
+
+
+def _resolve_agent_backend() -> str:
+    """Which :class:`~cuttlefish.agents.backend.AgentBackend` a delegation runs
+    through (ADR-0005, PLAN.md's Affordances) — "kopicode" by default, matching
+    V1/V2's only backend.
+    """
+    choice = os.environ.get(AGENT_BACKEND_ENV, DEFAULT_AGENT_BACKEND)
+    if choice not in ("kopicode", "claude-code"):
+        raise ConfigError(
+            f"unknown {AGENT_BACKEND_ENV}={choice!r}; expected 'kopicode' or 'claude-code'"
+        )
+    return choice
+
+
+def _check_binary_on_path(binary: str, *, env_hint: str) -> None:
     """Fail closed, before a task is even accepted (Q17) — not discovered mid-task."""
     if shutil.which(binary) is None:
-        raise ConfigError(
-            f"kopicode binary {binary!r} is not on PATH. Install kopicode, or set "
-            f"{KOPICODE_BIN_ENV} to its path."
-        )
+        raise ConfigError(f"{binary!r} is not on PATH. Install it, or set {env_hint} to its path.")
 
 
 def _parse_allow(values: list[str] | None) -> list[list[str]]:
@@ -138,8 +156,13 @@ def _resolve_sandbox_provider() -> SandboxProvider | None:
 
 async def _run(args: argparse.Namespace) -> int:
     kopicode_binary = _resolve_kopicode_binary()
+    claude_code_binary = _resolve_claude_code_binary()
     try:
-        _check_kopicode_on_path(kopicode_binary)
+        agent_backend = _resolve_agent_backend()
+        if agent_backend == "kopicode":
+            _check_binary_on_path(kopicode_binary, env_hint=KOPICODE_BIN_ENV)
+        else:
+            _check_binary_on_path(claude_code_binary, env_hint=CLAUDE_CODE_BIN_ENV)
         llm_provider = _resolve_llm_provider()
         sandbox_provider = _resolve_sandbox_provider()
     except ConfigError as exc:
@@ -152,6 +175,8 @@ async def _run(args: argparse.Namespace) -> int:
             episodic_store=episodic_store,
             llm_provider=llm_provider,
             kopicode_binary=kopicode_binary,
+            claude_code_binary=claude_code_binary,
+            agent_backend=agent_backend,
             sandbox_provider=sandbox_provider,
         )
     )
