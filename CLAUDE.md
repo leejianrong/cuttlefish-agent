@@ -1,4 +1,4 @@
-# CLAUDE.md — agent brief for cuttlefish-agent (becoming cuttlefish-crew)
+# CLAUDE.md — agent brief for cuttlefish-crew
 
 cuttlefish-crew is pivoting from a single-task supervisor into a fleet
 manager for teams of coding sub-agents across many software projects,

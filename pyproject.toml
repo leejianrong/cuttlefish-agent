@@ -56,8 +56,8 @@ dependencies = [
 cuttlefish = "cuttlefish.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/leejianrong/cuttlefish-agent"
-Repository = "https://github.com/leejianrong/cuttlefish-agent"
+Homepage = "https://github.com/leejianrong/cuttlefish-crew"
+Repository = "https://github.com/leejianrong/cuttlefish-crew"
 
 # uv dev dependency group (PEP 735); installed by default on `uv sync`.
 [dependency-groups]

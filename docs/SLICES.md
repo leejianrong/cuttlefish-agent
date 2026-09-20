@@ -1,4 +1,4 @@
-# cuttlefish-agent: Slices
+# cuttlefish-crew: Slices
 
 Vertical increments. Each ends in something you can demonstrate. Slice 1 confronts
 the riskiest unknown: whether a satay-workflow core loop can actually survive a
