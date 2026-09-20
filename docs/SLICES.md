@@ -148,11 +148,9 @@ V1 and V2 proved one durable, sandboxed delegation to kopicode. V3 is the
 pivot: cuttlefish becomes cuttlefish-crew, a fleet manager running teams of
 coding sub-agents across many projects at once. See `docs/PLAN.md` for the
 full problem/solution and `docs/QUESTIONS.md` Q28 onward for the decisions
-behind it. Slices A and B are built; slice C's team-concurrency half is
-built and its steering half is unblocked but not yet built; slices D-F are
-named and real but not yet planned in this file - each gets its own build
-plan once the slice before it ships and the interface it needs actually
-exists.
+behind it. Slices A, B, and C (both halves) are built; slices D-F are named
+and real but not yet planned in this file - each gets its own build plan
+once the slice before it ships and the interface it needs actually exists.
 
 ### Slice A: a pluggable agent backend, and the external rebrand
 
@@ -304,10 +302,9 @@ own `scope` column meaning need to change; the store's schema doesn't.
   preserved); a non-empty mapping merges over a copy of `os.environ`,
   overriding a same-named ambient value.
 
-### Slice C: multi-agent team concurrency (done), steerable chat (unblocked, not yet built)
+### Slice C: multi-agent team concurrency and steerable chat (both done)
 
-**Delivers:** `docs/PLAN.md`'s R10-R11 (team concurrency); R12 (steering)
-remains open.
+**Delivers:** `docs/PLAN.md`'s R10-R12.
 
 **Build plan (team-concurrency half, done)**
 
@@ -385,17 +382,72 @@ if wrong, a later slice needs to add per-role root/checkout support before
 - `_parse_roles` splits `NAME:TASK_TEXT` on the first `:`, rejects a
   missing `:`, an empty name/text, and a duplicate name.
 
-**Steering half: unblocked, not yet built.** satay `0.2.0`
-(`satay.control.run_app`, satay-runtime PR #101/#102, ADR-0046 there) closed
-the concrete gap that blocked this — `cuttlefish run` had no way to expose
-satay's own control API to anything outside the process (Q42). What's still
-ahead, once cuttlefish's own dependency is bumped and verified live: a
-`SteeringMessage` event type, `cuttlefish run --steerable` starting a
-`satay.control.run_app` block instead of a bare `satay.run_app` one and
-printing the base URL/token an operator needs, a `cuttlefish steer
-<task-id> "<message>"` HTTP client command, and the workflow-shape work
-(racing a short `wait_for_event` against normal delegation progress) inside
-`run_task`/`run_team` alike.
+### Slice C: steerable chat (done)
+
+**Build plan**
+
+1. satay `0.2.0` (`satay.control.run_app`, satay-runtime PR #101/#102,
+   ADR-0046 there) closed the concrete gap that blocked this — `cuttlefish
+   run` had no way to expose satay's own control API to anything outside the
+   process (Q42). cuttlefish's own pin bumped to `satay[studio]==0.2.0` (the
+   `[studio]` extra pulls in the FastAPI/uvicorn `satay.control.run_app`
+   itself needs — ADR-0008's own consequence, not an opt-in extra of
+   cuttlefish's own).
+2. A design pass first (ADR-0008), not skipped: the original sketch ("race a
+   short `wait_for_event` against normal delegation progress" via
+   `satay.gather`) turned out to be an unverified composition of satay's own
+   primitives — `wait_for_event`'s `WorkflowParked` unwinds the *whole*
+   workflow drive (a `BaseException`, handled only at the outermost per-run
+   loop), not one `gather` member, and neither kopicode's nor headless
+   Claude Code's headless surface accepts input after it starts anyway
+   (verified from source — a single argv positional, no stdin wiring).
+   ADR-0008 designed the buildable alternative instead: redirect at the
+   boundary between delegation rounds.
+3. `SteeringMessage(text, role)` (`cuttlefish.episodic.events`) — one
+   dataclass doing two jobs: satay's own wire payload type
+   (`wait_for_event`/`send_event` derive their inbox key's type name from
+   its `module.qualname`) and the episodic event journaled the moment a
+   round consumes one.
+4. `run_task`/`run_team` gain `steerable: bool = False` (default off, byte-
+   for-byte unchanged when unset) and become a loop of rounds: after each
+   round's outcome is journaled, one plain, sequential `wait_for_event(...,
+   timeout=DEFAULT_STEERING_GRACE_SECONDS)` decides whether to fold a queued
+   message into one more round (`cuttlefish.steering.compose_steered_text`)
+   or finalize with that round's own outcome. `run_team`'s own poll happens
+   *after* its `satay.gather` resolves, sequentially per role, never nested
+   inside one of that gather's members (the same unverified-composition risk
+   step 2 found). A `DelegationError` (an infra-level failure, not a
+   recorded `DelegationOutcome`) is never steered around, either workflow.
+5. `cuttlefish.steering`: the key scheme (`task_id`, or `task_id:role` for a
+   team role), the pointer file (`.cuttlefish/steering/<task-id>.json`,
+   written by `run --steerable`/`run-team --steerable`, removed on exit),
+   and `send_steering_message` — a synchronous HTTP client (`urllib.request`,
+   no new dependency) POSTing to satay's own `POST /runs/{run_id}/events`.
+6. `cuttlefish run --steerable` / `run-team --steerable` open
+   `satay.control.run_app()` instead of a bare `satay.run_app()`, print
+   `{"task_id": ..., "steering": {"base_url": ..., "token": ...}}`, and
+   write the pointer file. `cuttlefish steer <task-id> "<message>" [--role
+   NAME]` reads it and delivers.
+
+**Demo:** `cuttlefish run --steerable "add a .gitignore entry"` in one
+terminal; `cuttlefish steer <task-id> "actually add a .dockerignore
+instead"` in another while the first round is still running — the task
+starts a second round with the message folded into its prompt, visible in
+`cuttlefish show <task-id>` as a `SteeringMessage` event between two
+`DelegationStarted` events.
+
+**Verified live, 2026-09-21**, against the real kopicode binary (a real,
+rejected-but-uncharged network round trip so kopicode reaches a genuine
+`session_ended` rather than failing before ever opening a session): a
+message sent mid-round starts a fresh round with it folded into the prompt
+for both a plain task and a team role; a role nobody steers finalizes after
+exactly one round, untouched by another role being steered.
+
+**Rests on assumptions:** the round-boundary redirect (not instant, bounded
+by however long the round in flight takes) satisfies R12's "can redirect a
+still-running delegation's work" as written — if an operator's real usage
+needs faster-than-round-boundary responsiveness, that's new information this
+slice's own design pass didn't have, not a bug in it.
 
 ### Slices D-F: not yet fully planned
 

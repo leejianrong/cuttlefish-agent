@@ -29,7 +29,10 @@ classifiers = [
 # satay is pinned, not floated (docs/QUESTIONS.md Q19) — this project tracks a
 # specific satay release deliberately, since it's satay's first real external
 # consumer and a floating dependency would make "which satay version did this
-# behave against" an open question on every bug report. openai backs the default
+# behave against" an open question on every bug report. The `[studio]` extra
+# pulls in FastAPI/uvicorn for `satay.control.run_app` (ADR-0046) — `cuttlefish
+# run --steerable`'s own control API (ADR-0008) needs it unconditionally, not as
+# an opt-in extra of cuttlefish's own. openai backs the default
 # real LlmProvider, OpenRouterLlmProvider, over OpenRouter's OpenAI-compatible
 # endpoint (QUESTIONS.md Q11's "an OpenAI-compatible endpoint"); anthropic backs
 # ClaudeLlmProvider for a direct Anthropic credential. Both floated, since they're
@@ -44,7 +47,7 @@ classifiers = [
 # a well-audited, actively maintained SDK this project has no standing to pin
 # tightly, since it owns no cryptographic primitives of its own.
 dependencies = [
-    "satay==0.2.0",
+    "satay[studio]==0.2.0",
     "anthropic>=0.40",
     "openai>=3.3.1",
     "python-dotenv>=1.2.3",

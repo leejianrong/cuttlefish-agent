@@ -19,6 +19,7 @@ from cuttlefish.episodic.events import (
     HandoverWritten,
     LlmCallCompleted,
     LlmCallFailed,
+    SteeringMessage,
     TaskCompleted,
     TaskFailed,
     TaskSubmitted,
@@ -64,6 +65,8 @@ def _texts(payload: EventPayload) -> tuple[str, ...]:
             return (result,)
         case TaskFailed(error=error):
             return (error,)
+        case SteeringMessage(text=text):
+            return (text,)
         case _:
             return ()
 

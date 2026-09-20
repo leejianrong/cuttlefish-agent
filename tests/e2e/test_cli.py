@@ -71,6 +71,17 @@ def test_show_renders_the_full_sequence_matching_the_journal(
     assert "TaskFailed" in lines[3]
 
 
+def test_steer_on_a_task_that_is_not_currently_steerable_is_a_config_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = cli.main(["steer", "no-such-task", "hello"])
+
+    assert exit_code == cli.EXIT_CONFIG_ERROR
+    assert "no steerable task" in capsys.readouterr().err
+
+
 def test_missing_kopicode_binary_is_a_config_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

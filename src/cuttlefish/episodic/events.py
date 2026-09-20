@@ -176,6 +176,28 @@ class TaskFailed:
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
+class SteeringMessage:
+    """An operator's message, redirecting a still-running task or team role (ADR-0008).
+
+    Doubles as satay's own wire payload type for delivery, not just an episodic
+    event: ``cuttlefish.steering``'s ``satay.wait_for_event``/``send_event`` calls
+    derive their inbox key's type name from this class's own ``__module__`` +
+    ``__qualname__`` (satay's ``event_type_name``), the exact same string
+    ``cuttlefish.cli``'s HTTP client sends over the wire. One shape doing both jobs,
+    not two parallel event types — ADR-0004's storage separation is about *where*
+    a journal lives, not about a Python type describing an event that happens to
+    flow through both systems.
+    """
+
+    EVENT_TYPE: ClassVar[str] = "SteeringMessage"
+
+    text: str
+    # Which team role this message targets (ADR-0007's own discipline) -- None for
+    # a plain, non-team task.
+    role: str | None = None
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
 class UnknownPayload:
     """A payload whose event type this build does not recognise, preserved verbatim.
 
@@ -202,6 +224,7 @@ EventPayload = (
     | HandoverWritten
     | TaskCompleted
     | TaskFailed
+    | SteeringMessage
     | UnknownPayload
 )
 
@@ -219,6 +242,7 @@ _REGISTRY: Mapping[str, type[Any]] = {
         HandoverWritten,
         TaskCompleted,
         TaskFailed,
+        SteeringMessage,
     )
 }
 

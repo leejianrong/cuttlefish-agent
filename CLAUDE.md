@@ -20,7 +20,7 @@ doc comment all beat a paragraph here.
 
 - [`docs/PLAN.md`](docs/PLAN.md) — the current problem, scope, and shape
   (the cuttlefish-crew pivot direction, built on top of V1/V2's original MVP)
-- [`docs/adr/`](docs/adr/) — why each load-bearing decision was made, 0001–0007
+- [`docs/adr/`](docs/adr/) — why each load-bearing decision was made, 0001–0008
 - [`docs/SLICES.md`](docs/SLICES.md) — the build order this was built against
 - [`docs/QUESTIONS.md`](docs/QUESTIONS.md) — every decision, who made it, and
   where it landed, including gaps a live run surfaced after the fact
@@ -33,21 +33,34 @@ V1, V2 (a durable, sandboxed kopicode delegation), slice A (the pluggable
 `AgentBackend` seam — `KopicodeBackend` and `ClaudeCodeBackend`, selected via
 `CUTTLEFISH_AGENT_BACKEND`), slice B (`cuttlefish.secrets.SecretsStore` —
 an encrypted-at-rest, project-scoped secrets store injected through each
-backend's own `_credential_envs`), and slice C's team-concurrency half
-(`cuttlefish.team.run_team` — N named roles delegating concurrently via
-`satay.gather`, `cuttlefish run-team --role NAME:TASK_TEXT`) are complete
-and merged; `make ci` is green on `main`. Slice C's steering half is
-unblocked (satay `0.2.0` ships `satay.control.run_app`, satay-runtime PR
-#101/#102) but not yet built here. Start reading the code at
+backend's own `_credential_envs`), and slice C in full — both the
+team-concurrency half (`cuttlefish.team.run_team` — N named roles delegating
+concurrently via `satay.gather`, `cuttlefish run-team --role NAME:TASK_TEXT`)
+and the steering half (`cuttlefish run --steerable`/`run-team --steerable`
+open `satay.control.run_app` and print a `base_url`/token;
+`cuttlefish steer <task-id> "<message>" [--role NAME]` delivers a
+`SteeringMessage` that redirects a still-running task at the boundary
+between delegation rounds, not mid-flight, ADR-0008) — are complete and
+merged; `make ci` is green on `main`. Start reading the code at
 `cuttlefish/workflow.py` (the single-task core loop),
-`cuttlefish/team.py` (the multi-role loop), `cuttlefish/agents/` (the
-backend seam), and `cuttlefish/secrets/` (the secrets store) — each
-module's own doc comment explains why it exists, not a list here.
-Live-verification history and real bugs a live run found and fixed are in
-each PR's own description and `docs/QUESTIONS.md`, not repeated here.
+`cuttlefish/team.py` (the multi-role loop), `cuttlefish/steering.py` (the
+steering wire contract and CLI-facing pointer file/HTTP client),
+`cuttlefish/agents/` (the backend seam), and `cuttlefish/secrets/` (the
+secrets store) — each module's own doc comment explains why it exists, not
+a list here. Live-verification history and real bugs a live run found and
+fixed are in each PR's own description and `docs/QUESTIONS.md`, not
+repeated here.
 
 ## Known, accepted gaps — don't re-litigate
 
+- Steering (`cuttlefish steer`) redirects at a delegation round's boundary,
+  not mid-flight — a message sent while a real coding-agent invocation is
+  running waits for that invocation's own natural end before it's ever
+  seen (minutes, for a real task). Neither backend's headless surface
+  accepts input after it starts, and racing `satay.wait_for_event` against
+  an in-flight task via `satay.gather` is an unverified composition of
+  satay's own primitives (`WorkflowParked` unwinds the whole workflow
+  drive, not one `gather` member) — named honestly in ADR-0008, not solved.
 - `ClaudeCodeBackend`'s sandboxed path only works for an operator
   authenticated via `ANTHROPIC_API_KEY`, not Claude Code's own OAuth login.
   `docs/QUESTIONS.md` Q37.

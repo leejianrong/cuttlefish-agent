@@ -93,6 +93,21 @@ kopicode's own per-working-tree session lock means only one can actually edit
 at a time today — a real, named gap, not silent corruption (see
 `docs/adr/0007-...md`).
 
+Redirect a still-running task from a second terminal (`--steerable` prints
+the task id; `steer` reads a local pointer file to reach it):
+
+```bash
+uv run cuttlefish run --steerable "add a .gitignore entry"
+# in another terminal, while the above is still running:
+uv run cuttlefish steer <task-id> "actually add a .dockerignore instead"
+```
+
+A message takes effect at the boundary between delegation rounds, not
+mid-flight — it waits for whatever round is currently running to finish
+first (see `docs/adr/0008-...md` for why that's the honest limit, not a
+missing feature). `run-team --steerable` works the same way, per role
+(`cuttlefish steer <team-id> "<message>" --role NAME`).
+
 ## Configuration
 
 | Variable | Default | What it does |

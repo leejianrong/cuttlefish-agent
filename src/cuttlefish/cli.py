@@ -4,7 +4,10 @@
 state, printing a JSON result and exiting with a code from a small fixed set.
 ``cuttlefish show <task-id>`` renders one task's full episodic record for a person
 to read afterward — both derived from exactly the same journal, never a second
-transcript (ADR-0004).
+transcript (ADR-0004). ``run --steerable``/``run-team --steerable`` expose a local
+control API for the run's lifetime and ``cuttlefish steer <task-id> "<message>"``
+delivers to it — redirecting a still-running task at the boundary between
+delegation rounds, not mid-flight (ADR-0008).
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import satay
+import satay.control
 from dotenv import load_dotenv
 
 from cuttlefish import runtime
@@ -38,6 +42,13 @@ from cuttlefish.secrets.store import (
     MissingSecretsKeyError,
     SecretsStore,
     generate_key,
+)
+from cuttlefish.steering import (
+    SteeringDeliveryError,
+    read_steering_pointer,
+    remove_steering_pointer,
+    send_steering_message,
+    write_steering_pointer,
 )
 from cuttlefish.team import RoleInput, run_team
 from cuttlefish.workflow import run_task
@@ -318,24 +329,38 @@ async def _run(args: argparse.Namespace) -> int:
 
     runtime.configure(prepared.as_runtime())
     task_id = str(uuid.uuid4())
+    workflow_input = {
+        "task_id": task_id,
+        "text": args.task,
+        "root": root,
+        "token_budget": args.token_budget,
+        "allow": _parse_allow(args.allow),
+        "project": project,
+        "secret_names": secret_names,
+        "steerable": args.steerable,
+    }
 
     try:
-        async with satay.run_app() as store:
-            handle = satay.start(
-                run_task,
-                {
-                    "task_id": task_id,
-                    "text": args.task,
-                    "root": root,
-                    "token_budget": args.token_budget,
-                    "allow": _parse_allow(args.allow),
-                    "project": project,
-                    "secret_names": secret_names,
-                },
-                run_id=task_id,
-                store=store,
-            )
-            result = await handle.result()
+        if args.steerable:
+            async with satay.control.run_app() as app:
+                print(
+                    json.dumps(
+                        {
+                            "task_id": task_id,
+                            "steering": {"base_url": app.base_url, "token": app.token},
+                        }
+                    )
+                )
+                write_steering_pointer(task_id, base_url=app.base_url, token=app.token)
+                try:
+                    handle = satay.start(run_task, workflow_input, run_id=task_id, store=app.store)
+                    result = await handle.result()
+                finally:
+                    remove_steering_pointer(task_id)
+        else:
+            async with satay.run_app() as store:
+                handle = satay.start(run_task, workflow_input, run_id=task_id, store=store)
+                result = await handle.result()
     except satay.WorkflowFailedError as exc:
         print(json.dumps({"task_id": task_id, "status": "error", "error": str(exc)}))
         return EXIT_WORKFLOW_ERROR
@@ -385,22 +410,36 @@ async def _run_team(args: argparse.Namespace) -> int:
         {"name": role["name"], "text": role["text"], "allow": allow, "secret_names": secret_names}
         for role in roles
     ]
+    workflow_input = {
+        "team_id": team_id,
+        "root": root,
+        "project": project,
+        "roles": role_inputs,
+        "token_budget": args.token_budget,
+        "steerable": args.steerable,
+    }
 
     try:
-        async with satay.run_app() as store:
-            handle = satay.start(
-                run_team,
-                {
-                    "team_id": team_id,
-                    "root": root,
-                    "project": project,
-                    "roles": role_inputs,
-                    "token_budget": args.token_budget,
-                },
-                run_id=team_id,
-                store=store,
-            )
-            result = await handle.result()
+        if args.steerable:
+            async with satay.control.run_app() as app:
+                print(
+                    json.dumps(
+                        {
+                            "team_id": team_id,
+                            "steering": {"base_url": app.base_url, "token": app.token},
+                        }
+                    )
+                )
+                write_steering_pointer(team_id, base_url=app.base_url, token=app.token)
+                try:
+                    handle = satay.start(run_team, workflow_input, run_id=team_id, store=app.store)
+                    result = await handle.result()
+                finally:
+                    remove_steering_pointer(team_id)
+        else:
+            async with satay.run_app() as store:
+                handle = satay.start(run_team, workflow_input, run_id=team_id, store=store)
+                result = await handle.result()
     except satay.WorkflowFailedError as exc:
         print(json.dumps({"team_id": team_id, "status": "error", "error": str(exc)}))
         return EXIT_WORKFLOW_ERROR
@@ -426,6 +465,33 @@ def _show(args: argparse.Namespace) -> int:
         print(
             f"{event.seq}. {event.ts.isoformat()} {type(event.payload).__name__}: {event.payload}"
         )
+    return EXIT_OK
+
+
+def _steer(args: argparse.Namespace) -> int:
+    """Deliver one steering message to a still-running `--steerable` task or team
+    role (ADR-0008) -- a thin HTTP client over the pointer file `run`/`run-team
+    --steerable` published when they started.
+    """
+    pointer = read_steering_pointer(args.task_id)
+    if pointer is None:
+        print(
+            f"cuttlefish: no steerable task {args.task_id!r} is currently running "
+            "(it may not be --steerable, or may have already finished)",
+            file=sys.stderr,
+        )
+        return EXIT_CONFIG_ERROR
+
+    base_url, token = pointer
+    try:
+        send_steering_message(
+            base_url=base_url, token=token, task_id=args.task_id, role=args.role, text=args.message
+        )
+    except SteeringDeliveryError as exc:
+        print(f"cuttlefish: {exc}", file=sys.stderr)
+        return EXIT_TASK_FAILED
+
+    print(f"cuttlefish: steering message sent to {args.task_id!r}")
     return EXIT_OK
 
 
@@ -526,6 +592,15 @@ def build_parser() -> argparse.ArgumentParser:
             "scope. Repeatable. Requires CUTTLEFISH_SECRETS_KEY to be set."
         ),
     )
+    run_parser.add_argument(
+        "--steerable",
+        action="store_true",
+        help=(
+            "Expose a local control API for this run (ADR-0008) and print its "
+            'base_url/token, so `cuttlefish steer TASK_ID "message"` can redirect '
+            "it at the boundary between delegation rounds. Off by default."
+        ),
+    )
 
     run_team_parser = subparsers.add_parser(
         "run-team", help="Run several named roles concurrently against one project (ADR-0007)"
@@ -570,9 +645,28 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="NAME",
         help="One named secret every role may read (ADR-0006). Repeatable. Applies to all roles.",
     )
+    run_team_parser.add_argument(
+        "--steerable",
+        action="store_true",
+        help=(
+            "Expose a local control API for this run (ADR-0008), same as `run "
+            "--steerable`, applying to every role. Off by default."
+        ),
+    )
 
     show_parser = subparsers.add_parser("show", help="Render one task's full episodic record")
     show_parser.add_argument("task_id", help="The task id (the satay run id it was started with)")
+
+    steer_parser = subparsers.add_parser(
+        "steer", help="Redirect a still-running --steerable task or team role (ADR-0008)"
+    )
+    steer_parser.add_argument("task_id", help="The task id (or team id) to steer")
+    steer_parser.add_argument("message", help="The message to send")
+    steer_parser.add_argument(
+        "--role",
+        default=None,
+        help="Which team role to steer (required for a run-team task; omit for a plain run task)",
+    )
 
     secrets_parser = subparsers.add_parser(
         "secrets", help="Manage the project-scoped secrets store"
@@ -610,6 +704,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_run_team(args))
     if args.command == "secrets":
         return _secrets(args)
+    if args.command == "steer":
+        return _steer(args)
     return _show(args)
 
 
