@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from cuttlefish.episodic.store import EpisodicStore
 from cuttlefish.llm.provider import LlmProvider
 from cuttlefish.sandbox.provider import SandboxProvider
+from cuttlefish.secrets.store import SecretsStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +35,12 @@ class Runtime:
     both always present regardless of which backend is actually selected,
     the same way ``kopicode_binary`` was always required even before a second
     backend existed to compare it against.
+
+    ``secrets_store`` is ``None`` by default (ADR-0006), mirroring
+    ``sandbox_provider``'s own "opt-in, not the default" posture: an operator
+    who never sets ``CUTTLEFISH_SECRETS_KEY`` gets today's exact V1/V2
+    behaviour, every credential still resolved from ``os.environ`` by each
+    backend's own ``_credential_envs``.
     """
 
     episodic_store: EpisodicStore
@@ -42,6 +49,7 @@ class Runtime:
     claude_code_binary: str = "claude"
     agent_backend: str = "kopicode"
     sandbox_provider: SandboxProvider | None = None
+    secrets_store: SecretsStore | None = None
 
 
 _runtime: Runtime | None = None

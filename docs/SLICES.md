@@ -148,9 +148,9 @@ V1 and V2 proved one durable, sandboxed delegation to kopicode. V3 is the
 pivot: cuttlefish becomes cuttlefish-crew, a fleet manager running teams of
 coding sub-agents across many projects at once. See `docs/PLAN.md` for the
 full problem/solution and `docs/QUESTIONS.md` Q28 onward for the decisions
-behind it. Slice A is scoped and ready to build; slices B-F are named and
-real but not yet planned in this file - each gets its own build plan once
-the slice before it ships and the interface it needs actually exists.
+behind it. Slices A and B are built; slices C-F are named and real but not
+yet planned in this file - each gets its own build plan once the slice
+before it ships and the interface it needs actually exists.
 
 ### Slice A: a pluggable agent backend, and the external rebrand
 
@@ -217,14 +217,96 @@ unmocked-but-credential-less tests.
 - An event written by V1/V2's kopicode-specific schema still round-trips
   through the generalized backend-agnostic schema.
 
-### Slices B-F: not yet fully planned
+### Slice B: project/agent-scoped secrets management
+
+**Delivers:** `docs/PLAN.md`'s R7-R9.
+
+**Build plan**
+
+1. `cuttlefish.secrets.SecretsStore` (ADR-0006): an encrypted-at-rest,
+   project-scoped key/value store over its own SQLite file
+   (`.cuttlefish/secrets.db`), Fernet-encrypted under an operator-held
+   `CUTTLEFISH_SECRETS_KEY`. `resolve(project, names)` checks a project's
+   own scope first, falling back to the shared scope (`SHARED_SCOPE`).
+2. Extend `AgentBackend` (`cuttlefish.agents.backend`) with
+   `CREDENTIAL_ENV_VARS` (each backend's own always-relevant credential
+   names) and a `secrets: Mapping[str, str]` parameter on `delegate()`.
+   `KopicodeBackend`/`ClaudeCodeBackend`'s own `_credential_envs` now prefer
+   a resolved secret over `os.environ` for the same name, falling back to
+   `os.environ` when the store has nothing — the exact seam Q34 named,
+   replaced rather than bypassed.
+3. Give the direct-host path parity with the sandboxed one:
+   `run_kopicode`/`run_claude_code` gain an `env: Mapping[str, str] | None`
+   parameter, merged as `{**os.environ, **env}` via the shared
+   `cuttlefish.delegate.subprocess_env.merge_env` (`None`/empty still means
+   exactly today's full inheritance).
+4. Wire `project`/`secret_names` through `cuttlefish.tasks.delegate
+   .delegate_to_agent_backend` (resolution happens *inside* this
+   already-`side_effect=True` task — a decrypted value is a local variable
+   here, never a satay task argument or return value) and
+   `cuttlefish.workflow.run_task`'s `TaskInput`; record `project`/
+   `secret_names` (names only) on `DelegationStarted`.
+5. `cuttlefish run --project NAME --secret NAME` (repeatable), mirroring
+   `--allow`'s shape; a declared name absent from both scopes is a
+   config-time error (Q17), checked before the workflow starts. Seed the
+   episodic journal's `Redactor` with the same resolved names so a leaked
+   secret is still caught (a store-resolved value never touches
+   `os.environ`, the redactor's own default lookup).
+6. `cuttlefish secrets generate-key|set|get|list|delete` for managing the
+   store directly — `set`'s value is prompted (hidden) or read from stdin,
+   never a command-line argument.
+
+**Demo:** `cuttlefish secrets generate-key`, then `cuttlefish secrets set
+--project demo HUGGINGFACE_TOKEN` (piped or prompted), then `cuttlefish run
+"<task>" --project demo --secret HUGGINGFACE_TOKEN` — the delegation's own
+sandbox/subprocess carries `HUGGINGFACE_TOKEN` without it ever being
+exported into the operator's shell. Declaring the same `--secret` with
+`CUTTLEFISH_SECRETS_KEY` unset, or a name that was never set in either
+scope, both fail closed with a clear config error before any task starts.
+
+**Rests on assumptions:** Q38 (a project is a plain string, not a formal
+entity yet) — if wrong, only the CLI's `--project` surface and the store's
+own `scope` column meaning need to change; the store's schema doesn't.
+
+### Test plan
+
+#### End-to-end
+
+- `cuttlefish secrets set` then `cuttlefish secrets get` round-trips a
+  value for a project scope and, separately, the shared scope.
+- `cuttlefish run --project X --secret NAME` with `NAME` set only in the
+  shared scope still resolves it (fallback), and a project-scoped value of
+  the same name wins over a shared one when both exist.
+- `cuttlefish run --secret NAME` with `CUTTLEFISH_SECRETS_KEY` unset, or
+  with `NAME` absent from both scopes, both exit with `EXIT_CONFIG_ERROR`
+  before a workflow starts.
+
+#### Integration
+
+- `delegate_to_agent_backend` resolves `secret_names` unioned with the
+  configured backend's own `CREDENTIAL_ENV_VARS`, scoped to the declared
+  `project` — verified against a real `SecretsStore`, not a mock.
+- A `DelegationStarted` event written before this slice (no `project`/
+  `secret_names` keys in its encoded data) still decodes, defaulting to
+  the one scope every task implicitly ran under then.
+
+#### Unit
+
+- `SecretsStore.set`/`get`/`delete`/`list_names`/`resolve` round-trip
+  correctly, including scope fallback and cross-project isolation; the
+  on-disk ciphertext never contains the plaintext.
+- Each backend's `_credential_envs` prefers a resolved secret over
+  `os.environ`, falls back to it when absent, and forwards any other
+  declared secret verbatim.
+- `merge_env(None)`/`merge_env({})` both return `None` (full inheritance
+  preserved); a non-empty mapping merges over a copy of `os.environ`,
+  overriding a same-named ambient value.
+
+### Slices C-F: not yet fully planned
 
 Named and real, sketched in `docs/PLAN.md`'s Open risks and
-`docs/QUESTIONS.md` Q28-Q34, but none has its own build plan yet.
+`docs/QUESTIONS.md` Q28-Q37, but none has its own build plan yet.
 
-- **Slice B - secrets management**: an encrypted-at-rest secrets store
-  scoped per project, injected at sandbox-creation time through the same
-  declared-policy mechanism (Q34).
 - **Slice C - multi-agent handover and steerable chat**: generalizing V1's
   per-task handover (ADR-0004) across a team, plus external steering built
   on satay's `wait_for_event`/`send_event` (ADR-0001's 2026-09-20 addendum,

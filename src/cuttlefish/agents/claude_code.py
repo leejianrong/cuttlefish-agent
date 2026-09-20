@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import shutil
+from collections.abc import Mapping
 from typing import ClassVar
 
 from cuttlefish.agents.outcome import DelegationError, DelegationOutcome
@@ -33,14 +34,24 @@ _SANDBOX_CLAUDE_CODE_BINARY = "/usr/local/bin/claude"
 _CREDENTIAL_ENV_VARS = ("ANTHROPIC_API_KEY",)
 
 
-def _credential_envs() -> dict[str, str]:
-    return {name: value for name in _CREDENTIAL_ENV_VARS if (value := os.environ.get(name))}
+def _credential_envs(secrets: Mapping[str, str]) -> dict[str, str]:
+    """See `cuttlefish.agents.kopicode._credential_envs` (ADR-0006) -- identical
+    precedence (store wins over `os.environ`, any other declared secret is
+    forwarded as-is), just this backend's own, shorter credential list."""
+    resolved = {
+        name: value
+        for name in _CREDENTIAL_ENV_VARS
+        if (value := secrets.get(name) or os.environ.get(name))
+    }
+    resolved.update({name: value for name, value in secrets.items() if name not in resolved})
+    return resolved
 
 
 class ClaudeCodeBackend:
     """Wraps headless Claude Code (``claude -p``) behind the pluggable backend seam."""
 
     NAME: ClassVar[str] = "claude-code"
+    CREDENTIAL_ENV_VARS: ClassVar[tuple[str, ...]] = _CREDENTIAL_ENV_VARS
 
     def __init__(self, binary: str = "claude") -> None:
         self._binary = binary
@@ -51,14 +62,19 @@ class ClaudeCodeBackend:
         task_text: str,
         root: str,
         allow: list[list[str]] | None,
+        secrets: Mapping[str, str],
         sandbox_provider: SandboxProvider | None,
     ) -> DelegationOutcome:
         if sandbox_provider is None:
             return await run_claude_code(
-                binary=self._binary, task_text=task_text, root=root, allow=allow
+                binary=self._binary,
+                task_text=task_text,
+                root=root,
+                allow=allow,
+                env=_credential_envs(secrets),
             )
         return await self._delegate_inside_sandbox(
-            sandbox_provider, task_text=task_text, root=root, allow=allow
+            sandbox_provider, task_text=task_text, root=root, allow=allow, secrets=secrets
         )
 
     async def _delegate_inside_sandbox(
@@ -68,6 +84,7 @@ class ClaudeCodeBackend:
         task_text: str,
         root: str,
         allow: list[list[str]] | None,
+        secrets: Mapping[str, str],
     ) -> DelegationOutcome:
         resolved_binary = shutil.which(self._binary)
         if resolved_binary is None:
@@ -75,7 +92,7 @@ class ClaudeCodeBackend:
 
         handle = await provider.create(
             SandboxSpec(
-                envs=_credential_envs(),
+                envs=_credential_envs(secrets),
                 mounts={resolved_binary: _SANDBOX_CLAUDE_CODE_BINARY, root: root},
             )
         )

@@ -36,6 +36,12 @@ KNOWN_PAYLOADS: list[EventPayload] = [
         policy_allow=[["go", "test"]],
         sandbox="container",
     ),
+    DelegationStarted(
+        task_text="fix the bug",
+        root="/tmp/scratch",
+        project="demo",
+        secret_names=["HUGGINGFACE_TOKEN"],
+    ),
     DelegationCompleted(summary="added the entry", edited_paths=[".gitignore"]),
     DelegationRefused(reason="run_shell is not on the declared allowlist"),
     DelegationFailed(reason="kopicode binary exited 1"),
@@ -67,6 +73,23 @@ def test_unknown_payload_round_trips_verbatim() -> None:
     assert data == {"whatever": "shape"}
     decoded = decode_payload(event_type, data)
     assert decoded == original
+
+
+def test_a_pre_slice_b_delegation_started_event_still_decodes() -> None:
+    """A `DelegationStarted` written before ADR-0006 added `project`/
+    `secret_names` has neither key in its `data` dict at all -- must decode to
+    the one scope every task implicitly ran under then, not raise."""
+    pre_slice_b_data = {
+        "task_text": "fix the bug",
+        "root": "/tmp/scratch",
+        "policy_allow": None,
+        "sandbox": None,
+        "backend": "kopicode",
+    }
+    decoded = decode_payload("DelegationStarted", pre_slice_b_data)
+    assert isinstance(decoded, DelegationStarted)
+    assert decoded.project == "default"
+    assert decoded.secret_names == []
 
 
 def test_decode_ignores_a_field_a_known_type_does_not_declare() -> None:

@@ -27,6 +27,7 @@ from cuttlefish.episodic.events import (
     TaskSubmitted,
 )
 from cuttlefish.handover import DEFAULT_TOKEN_BUDGET, maybe_handover
+from cuttlefish.secrets.store import DEFAULT_PROJECT
 from cuttlefish.tasks.delegate import delegate_to_agent_backend
 from cuttlefish.tasks.journal import journal
 
@@ -48,6 +49,11 @@ class TaskInput(TypedDict):
     original, hardcoded no-shell-commands-at-all policy) — the operator-declared,
     per-task policy KAN-1011 adds (docs/SLICES.md V2 step 3), each entry one
     allowed command as an argv list, in kopicode's own declared-allowlist grammar.
+
+    ``project``/``secret_names`` (ADR-0006) are both optional and default to
+    ``secrets.store.DEFAULT_PROJECT``/an empty list — a task that declares
+    neither reads no project-scoped secret at all, and every backend's own
+    credential still resolves from ``os.environ`` exactly as it always has.
     """
 
     task_id: str
@@ -55,6 +61,8 @@ class TaskInput(TypedDict):
     root: str
     token_budget: NotRequired[int]
     allow: NotRequired[list[list[str]]]
+    project: NotRequired[str]
+    secret_names: NotRequired[list[str]]
 
 
 @satay.workflow
@@ -64,6 +72,8 @@ async def run_task(task_input: TaskInput) -> dict[str, Any]:
     root = task_input["root"]
     token_budget = task_input.get("token_budget", DEFAULT_TOKEN_BUDGET)
     allow = task_input.get("allow", DEFAULT_SHELL_ALLOWLIST)
+    project = task_input.get("project", DEFAULT_PROJECT)
+    secret_names = task_input.get("secret_names", [])
 
     await journal(task_id, TaskSubmitted(text=text))
     await maybe_handover(task_id, token_budget=token_budget)
@@ -71,8 +81,10 @@ async def run_task(task_input: TaskInput) -> dict[str, Any]:
     # Every delegation now runs behind its own backend's declared-allowlist
     # policy gate (KAN-987, ADR-0002's addendum) -- this records what was
     # actually declared for this task (KAN-1011), which agent backend ran it
-    # (ADR-0005), and which sandbox backend (if any) actually ran it
-    # (KAN-1010) -- not just what was asked.
+    # (ADR-0005), which sandbox backend (if any) actually ran it (KAN-1010),
+    # and which secrets scope/declared names it could read from (ADR-0006,
+    # names only -- see delegate_to_agent_backend's own docstring for why a
+    # resolved value never reaches this far) -- not just what was asked.
     runtime_ = runtime.current()
     sandbox_provider = runtime_.sandbox_provider
     sandbox_name = sandbox_provider.BACKEND_NAME if sandbox_provider is not None else None
@@ -84,11 +96,15 @@ async def run_task(task_input: TaskInput) -> dict[str, Any]:
             policy_allow=allow,
             sandbox=sandbox_name,
             backend=runtime_.agent_backend,
+            project=project,
+            secret_names=secret_names,
         ),
     )
 
     try:
-        outcome = await delegate_to_agent_backend(text, root, allow=allow)
+        outcome = await delegate_to_agent_backend(
+            text, root, allow=allow, project=project, secret_names=secret_names
+        )
     except DelegationError as exc:
         # A plain (non-collected) awaited task's failure re-raises the task body's
         # own exception type unchanged — satay.TaskFailedError only wraps a

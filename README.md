@@ -71,6 +71,14 @@ Route the delegation through a container sandbox rather than the bare host:
 CUTTLEFISH_SANDBOX=container uv run cuttlefish run "add a .gitignore entry"
 ```
 
+Give one project its own, encrypted-at-rest secret and let a delegation read it:
+
+```bash
+export CUTTLEFISH_SECRETS_KEY=$(uv run cuttlefish secrets generate-key)
+echo "hf_..." | uv run cuttlefish secrets set --project demo HUGGINGFACE_TOKEN
+uv run cuttlefish run "..." --project demo --secret HUGGINGFACE_TOKEN
+```
+
 ## Configuration
 
 | Variable | Default | What it does |
@@ -80,6 +88,7 @@ CUTTLEFISH_SANDBOX=container uv run cuttlefish run "add a .gitignore entry"
 | `CUTTLEFISH_CLAUDE_CODE_BIN` | `claude` | Path to the Claude Code binary, when that backend is selected. |
 | `CUTTLEFISH_LLM_PROVIDER` | `openrouter` | cuttlefish's own reasoning calls (handover summaries): `openrouter`, `claude`, or `replay` (keyless, for smoke tests). |
 | `CUTTLEFISH_SANDBOX` | `none` | Real containment for the delegation: `none`, `container` (local Docker, no account needed), or `e2b`. |
+| `CUTTLEFISH_SECRETS_KEY` | unset | Enables `cuttlefish.secrets.SecretsStore` (`cuttlefish secrets ...`, `run --project/--secret`). Unset means no project-scoped secrets store at all. |
 
 A real run also needs a model credential for whichever LLM provider and
 agent backend are selected (e.g. `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`).

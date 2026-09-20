@@ -59,6 +59,7 @@ from pathlib import Path
 from typing import Any
 
 from cuttlefish.agents.outcome import DelegationError, DelegationOutcome
+from cuttlefish.delegate.subprocess_env import merge_env
 from cuttlefish.sandbox.provider import SandboxError, SandboxHandle, SandboxProvider
 
 #: stream-json's per-line `type` values this module reads.
@@ -202,6 +203,7 @@ async def run_claude_code(
     task_text: str,
     root: str,
     allow: list[list[str]] | None = None,
+    env: Mapping[str, str] | None = None,
     timeout: float | None = None,
 ) -> DelegationOutcome:
     """Run ``binary -p task_text ...`` in `root` and classify what it did.
@@ -217,6 +219,7 @@ async def run_claude_code(
             cwd=root,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=merge_env(env),
         )
     except FileNotFoundError as exc:
         raise DelegationError(f"Claude Code binary {binary!r} not found") from exc

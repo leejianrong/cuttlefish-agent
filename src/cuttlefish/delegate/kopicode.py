@@ -17,6 +17,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from cuttlefish.agents.outcome import DelegationError, DelegationOutcome
+from cuttlefish.delegate.subprocess_env import merge_env
 from cuttlefish.sandbox.provider import SandboxError, SandboxHandle, SandboxProvider
 
 #: kopicode run --print's per-line `kind` values this module reads. Every other kind
@@ -140,6 +141,7 @@ async def run_kopicode(
     task_text: str,
     root: str,
     policy_file: str | None = None,
+    env: Mapping[str, str] | None = None,
     timeout: float | None = None,
 ) -> DelegationOutcome:
     """Run ``binary run --print task_text`` in `root` and classify what it did.
@@ -159,6 +161,7 @@ async def run_kopicode(
             cwd=root,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=merge_env(env),
         )
     except FileNotFoundError as exc:
         raise DelegationError(f"kopicode binary {binary!r} not found") from exc
