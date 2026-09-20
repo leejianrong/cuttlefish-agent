@@ -11,7 +11,7 @@ Two tests, at two grains:
 - ``test_delegation_is_not_invoked_twice_after_a_crash`` isolates exactly the
   property R1 states — kopicode is not invoked a second time for the same
   logical call — using a minimal single-task workflow around the real
-  ``delegate_to_kopicode`` task. satay's own ``FaultInjector`` crashes on the
+  ``delegate_to_agent_backend`` task. satay's own ``FaultInjector`` crashes on the
   *next* commit of a given journal event type (it has no "skip N, then crash"
   mode), so this stays isolated rather than trying to land the crash at a
   specific ordinal inside the full, multi-task ``run_task`` workflow.
@@ -57,7 +57,7 @@ from cuttlefish.episodic.events import (
 )
 from cuttlefish.episodic.store import EpisodicStore
 from cuttlefish.llm.replay import ReplayLlmProvider
-from cuttlefish.tasks.delegate import delegate_to_kopicode
+from cuttlefish.tasks.delegate import delegate_to_agent_backend
 from cuttlefish.workflow import run_task
 
 
@@ -103,7 +103,7 @@ async def _delegate_only(task_input: dict[str, str]) -> DelegationOutcome:
     lands exactly on this one task's own completion, not some other task's — see
     the module docstring.
     """
-    return await delegate_to_kopicode(task_input["text"], task_input["root"])
+    return await delegate_to_agent_backend(task_input["text"], task_input["root"])
 
 
 @pytest.mark.requires_kopicode
@@ -131,7 +131,7 @@ async def test_delegation_is_not_invoked_twice_after_a_crash(
     task_input = {"text": "add a .gitignore entry", "root": str(root)}
     database = tmp_path / "satay.db"
 
-    # -- Phase 1: crash right after delegate_to_kopicode's own TaskCompleted. -----
+    # -- Phase 1: crash right after delegate_to_agent_backend's own TaskCompleted. -----
     store = SQLiteStore.open(database)
     injector = FaultInjector()
     injector.crash_after("TaskCompleted")

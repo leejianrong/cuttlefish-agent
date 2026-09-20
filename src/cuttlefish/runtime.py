@@ -26,11 +26,21 @@ class Runtime:
     always did, the named exception ADR-0002's addendum already accepts, not a
     new default this project is quietly widening. Configuring one is opt-in
     (``cuttlefish.cli``'s ``CUTTLEFISH_SANDBOX`` environment variable).
+
+    ``agent_backend`` names which :class:`~cuttlefish.agents.backend.AgentBackend`
+    a delegation runs through (ADR-0005) — ``"kopicode"`` by default, matching
+    V1/V2's only backend, so existing callers that never set this field keep
+    their exact prior behaviour. ``kopicode_binary``/``claude_code_binary`` are
+    both always present regardless of which backend is actually selected,
+    the same way ``kopicode_binary`` was always required even before a second
+    backend existed to compare it against.
     """
 
     episodic_store: EpisodicStore
     llm_provider: LlmProvider
     kopicode_binary: str
+    claude_code_binary: str = "claude"
+    agent_backend: str = "kopicode"
     sandbox_provider: SandboxProvider | None = None
 
 

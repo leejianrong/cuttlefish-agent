@@ -53,15 +53,48 @@ known gap. Progress is tracked on the `cuttlefish-agent` Pandan board (epics
 **A pivot is underway as of 2026-09-20**: the project is becoming
 **cuttlefish-crew**, a fleet manager running teams of coding sub-agents
 across many projects at once, not a single supervised task. `docs/PLAN.md`
-now describes this direction - slice A is a pluggable `AgentBackend`
-interface generalizing past kopicode, plus the external rebrand.
-`docs/QUESTIONS.md` Q28 onward and
+now describes this direction, `docs/QUESTIONS.md` Q28 onward and
 [`docs/adr/0005-agent-backend-becomes-a-pluggable-protocol.md`](docs/adr/0005-agent-backend-becomes-a-pluggable-protocol.md)
 carry the new decisions, and addenda on ADR-0001/ADR-0002 record what
 changed for satay's steering primitive and the multi-tenant trigger,
-respectively. The module list and everything else below still describes the
-V1/V2 code exactly as it exists today - read it as the foundation this pivot
-builds on, not as the current target.
+respectively.
+
+**Slice A (the pluggable agent backend + rename) is complete**, landed the
+same day it was scoped. The coding-agent delegation runs through a new
+`cuttlefish.agents.AgentBackend` seam instead of a kopicode-hardcoded call
+site: `KopicodeBackend` moved V1/V2's exact delegation mechanics behind it
+with no behaviour change, and a new `ClaudeCodeBackend` wraps headless
+Claude Code (`claude -p ... --output-format stream-json`) as the second,
+proving implementation. Both were verified live against their real binaries
+- kopicode's own live proof predates this slice; Claude Code's own live run
+(a real file landing, and a real no-declared-allowlist task correctly unable
+to reach a shell at all) surfaced and fixed a real bug the same way KAN-1008
+did for kopicode: Claude Code's `Write`/`Edit` tool_use blocks report an
+*absolute* `file_path`, unlike kopicode's relative `edit_applied.path` -
+`cuttlefish.delegate.claude_code.classify_stream` now relativizes against
+`root` so `DelegationOutcome.edited_paths` reads the same regardless of
+which backend produced it (`docs/QUESTIONS.md` Q35). Selected via
+`CUTTLEFISH_AGENT_BACKEND=kopicode|claude-code` (default `kopicode`),
+mirroring `CUTTLEFISH_SANDBOX`'s existing pattern.
+
+Two gaps are named, not hidden, the same discipline this project already
+holds itself to: **policy parity is real but partial** - no declared
+allowlist maps to `--disallowedTools Bash` (a real, verified fail-closed
+result, the shell tool is absent from the model's toolset entirely), but a
+declared allowlist maps to `--allowedTools Bash(<cmd>:*)` patterns whose
+matching semantics are Claude Code's own, unverified against every command
+shape kopicode's grammar accepts (`docs/QUESTIONS.md` Q36). And **a
+sandboxed `ClaudeCodeBackend` delegation only works for an operator
+authenticated by an `ANTHROPIC_API_KEY`**, not Claude Code's own OAuth login
+- this build's own `claude` binary authenticates via OAuth with no API key
+set at all, so a sandboxed delegation under that auth mode fails closed,
+named and accepted for this slice rather than solved (`docs/QUESTIONS.md`
+Q37).
+
+The module list and everything else below still describes the V1/V2 code
+largely as it existed before this slice, now living behind the pluggable
+seam - read it as the foundation slice A built on, not as a separate,
+older system.
 
 What each module is, in one or two lines - read its own doc comment for why,
 not this list:
@@ -72,11 +105,20 @@ not this list:
   unrecognised event type round-trips verbatim instead of being dropped.
   ADR-0004.
 - **`cuttlefish.workflow`** - `run_task`, the `@satay.workflow` core loop:
-  one task per LLM call, one for the kopicode delegation. ADR-0001.
-- **`cuttlefish.delegate`** - shells out to `kopicode run --print`, parses
-  its NDJSON stream into one `DelegationOutcome`, writes and passes the
-  declared-allowlist policy file KAN-987 added. ADR-0003, and the "one
-  external dependency" section below.
+  one task per LLM call, one for the agent-backend delegation. ADR-0001,
+  ADR-0005.
+- **`cuttlefish.agents`** - the pluggable `AgentBackend` seam (ADR-0005):
+  `KopicodeBackend` (the reference implementation) and `ClaudeCodeBackend`
+  (the second, proving it), each owning its own policy/sandbox mechanics
+  honestly rather than pretending to a uniform guarantee neither backend
+  can actually make. `cuttlefish.tasks.delegate.delegate_to_agent_backend`
+  resolves which one runs from `runtime.Runtime.agent_backend`.
+- **`cuttlefish.delegate`** - each backend's own native CLI mechanics:
+  `kopicode.py` shells out to `kopicode run --print`, parses its NDJSON
+  stream (ADR-0003); `claude_code.py` shells out to `claude -p ...
+  --output-format stream-json` (ADR-0005). Both normalise to one
+  `DelegationOutcome` (`cuttlefish.agents.outcome`). See also the "one
+  external dependency" section below, for kopicode's own policy gate.
 - **`cuttlefish.sandbox`** - the `SandboxProvider` seam (create/exec/snapshot/
   destroy), `ContainerSandboxProvider` (a local Docker daemon, no account
   needed) and `E2bSandboxProvider` (built, never yet run against a live
@@ -141,8 +183,12 @@ These follow directly from the ADRs. Hold them without re-litigating them here.
   happens when a hand-rolled transcript drifts from reality.
 - **The sandbox stays an internal package, not a second product**, until there's
   a real second consumer or a concrete, proven reason to spin it out. ADR-0002.
-- **No new protocol between cuttlefish and kopicode.** The delegation wraps
-  `kopicode run --print` as it exists. ADR-0003.
+- **No new protocol for any given backend.** Each `AgentBackend` wraps its
+  own tool's existing headless surface as it exists (kopicode's
+  `run --print`, ADR-0003; Claude Code's `-p --output-format stream-json`,
+  ADR-0005) - cuttlefish-crew normalises on its own side
+  (`DelegationOutcome`), it doesn't invent a shared wire format between
+  backends either.
 - **Secrets are redacted from the episodic journal at write time**, not read
   time - by the time a value is readable, it's already committable.
 
