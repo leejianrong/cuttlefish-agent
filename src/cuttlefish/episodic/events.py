@@ -29,6 +29,10 @@ class TaskSubmitted:
     EVENT_TYPE: ClassVar[str] = "TaskSubmitted"
 
     text: str
+    # Which team role submitted this text (ADR-0007) -- None for a plain,
+    # non-team cuttlefish run (every event before this slice, and every one
+    # cuttlefish run itself still writes).
+    role: str | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -85,6 +89,8 @@ class DelegationStarted:
     # never their values — a resolved value never crosses a satay task boundary,
     # let alone gets journaled here (ADR-0006).
     secret_names: list[str] = dataclasses.field(default_factory=list)
+    # Which team role this delegation belongs to (ADR-0007) -- None outside a team.
+    role: str | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -99,6 +105,7 @@ class DelegationCompleted:
     # identically (dataclasses.asdict re-serialises whatever container is actually
     # there).
     edited_paths: list[str] = dataclasses.field(default_factory=list)
+    role: str | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -113,6 +120,7 @@ class DelegationRefused:
     EVENT_TYPE: ClassVar[str] = "DelegationRefused"
 
     reason: str
+    role: str | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -124,6 +132,7 @@ class DelegationFailed:
     EVENT_TYPE: ClassVar[str] = "DelegationFailed"
 
     reason: str
+    role: str | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -140,6 +149,10 @@ class HandoverWritten:
     summary: str
     covers_seq_from: int
     covers_seq_to: int
+    # Which team role this handover covers (ADR-0007) -- None outside a team, so
+    # this checkpoint only ever suppresses another handover for the *same* role
+    # (or the same plain single-task run).
+    role: str | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -149,6 +162,7 @@ class TaskCompleted:
     EVENT_TYPE: ClassVar[str] = "TaskCompleted"
 
     result: str
+    role: str | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -158,6 +172,7 @@ class TaskFailed:
     EVENT_TYPE: ClassVar[str] = "TaskFailed"
 
     error: str
+    role: str | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

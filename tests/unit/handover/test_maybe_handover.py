@@ -87,3 +87,54 @@ async def test_nothing_to_summarise_after_a_handover_is_a_no_op(tmp_path: Path) 
     # Nothing new appended since -- the window is empty, regardless of budget.
     assert await maybe_handover("task-1", token_budget=0) is False
     store.close()
+
+
+async def test_role_filters_the_window_to_that_roles_own_events(tmp_path: Path) -> None:
+    """ADR-0007: a team shares one task_id, so a role's own handover must not see,
+    or be triggered by, another role's events."""
+    store = _configure(tmp_path, LlmResponse(model="replay", text="builder summary"))
+    store.append("team-1", TaskSubmitted(text="x" * 4000, role="builder"))
+    store.append("team-1", TaskSubmitted(text="y" * 4000, role="reviewer"))
+
+    fired = await maybe_handover("team-1", token_budget=50, role="builder")
+
+    assert fired is True
+    events = list(store.read("team-1"))
+    handovers = [e for e in events if isinstance(e.payload, HandoverWritten)]
+    assert len(handovers) == 1
+    assert handovers[0].payload.role == "builder"
+    assert handovers[0].payload.covers_seq_from == 1
+    assert handovers[0].payload.covers_seq_to == 1  # the reviewer's own event (seq 2) excluded
+    store.close()
+
+
+async def test_one_roles_handover_does_not_suppress_anothers(tmp_path: Path) -> None:
+    store = _configure(
+        tmp_path,
+        LlmResponse(model="replay", text="builder summary"),
+        LlmResponse(model="replay", text="reviewer summary"),
+    )
+    store.append("team-1", TaskSubmitted(text="x" * 4000, role="builder"))
+    store.append("team-1", TaskSubmitted(text="y" * 4000, role="reviewer"))
+    assert await maybe_handover("team-1", token_budget=50, role="builder") is True
+
+    # The reviewer's own window is untouched by the builder's handover above.
+    assert await maybe_handover("team-1", token_budget=50, role="reviewer") is True
+
+    events = list(store.read("team-1"))
+    handovers = [e for e in events if isinstance(e.payload, HandoverWritten)]
+    assert {h.payload.role for h in handovers} == {"builder", "reviewer"}
+    store.close()
+
+
+async def test_role_none_stays_the_plain_single_task_behaviour(tmp_path: Path) -> None:
+    """A role-tagged event must not leak into the default (role=None) window --
+    otherwise a plain `cuttlefish run` sharing a store with a team elsewhere would
+    see its own budget consumed by events that aren't its own."""
+    store = _configure(tmp_path)
+    store.append("task-1", TaskSubmitted(text="x" * 4000, role="builder"))
+
+    fired = await maybe_handover("task-1", token_budget=50)
+
+    assert fired is False
+    store.close()

@@ -1,12 +1,14 @@
 # cuttlefish-crew: Plan
 
 Status: agreed and delivered - slice A (pluggable agent backend + rename,
-PR #21) and slice B (project/agent-scoped secrets management, ADR-0006) are
-both complete and merged. Supersedes the single-task-MVP framing this
-document held through V1/V2 (both complete, both merged to `main` - see
+PR #21), slice B (project/agent-scoped secrets management, ADR-0006), and
+slice C's team-concurrency half (`cuttlefish run-team`, ADR-0007) are all
+complete and merged. Supersedes the single-task-MVP framing this document
+held through V1/V2 (both complete, both merged to `main` - see
 `CLAUDE.md`'s "What's built" for that history, which stays true and is not
-being redone, only built on). Next up per `docs/SLICES.md`: slice C,
-multi-agent handover and steerable chat.
+being redone, only built on). Slice C's steering half is unblocked
+(satay `0.2.0` ships the needed capability, ADR-0007/Q42) but not yet built
+in cuttlefish itself - next up per `docs/SLICES.md`.
 
 ## Problem
 
@@ -132,35 +134,56 @@ the operator actually babysits today.
   "no satay-journaled plaintext" section). No credential-broker/proxy - that
   remains explicitly deferred (Q34), unattempted this slice.
 
+- **Slice C's team-concurrency half (ADR-0007):** `cuttlefish.team.run_team`
+  runs N named roles' delegations concurrently via `satay.gather`, all
+  sharing one `task_id` (their own satay run id) rather than one satay run
+  per role - `run_task`'s own `task_id`-is-the-run-id identity discipline
+  (ADR-0001/Q6) has no hook for a `start_child`-spawned run to learn its own
+  id before its first journal write, so a shared journal with a `role` tag
+  on every event was the additive answer, not a second identity scheme.
+  `cuttlefish run-team --role NAME:TASK_TEXT` (repeatable); `maybe_handover`
+  gained a `role` filter so one role's own context bloat can't force
+  another's window closed early. Verified live (2026-09-20) that this is
+  real concurrency, not a declared-but-serial fan-out - and, separately,
+  that two roles sharing one kopicode-backed `--root` collide on kopicode's
+  own per-working-tree session lock, a real, named, accepted gap (Q44), not
+  a bug this project fixed or worked around.
+- **The satay-runtime dependency slice C's steering half needed (Q42):**
+  satay had no way to expose its own control API to anything outside a
+  `cuttlefish run` process without pulling in `satay dev`'s whole
+  interactive-session model. Filed and built directly in satay-runtime
+  (satay-runtime PR #101, ADR-0046 there) rather than worked around inside
+  this repo, per the standing Q33 instruction - `satay.control.run_app`,
+  shipped as satay `0.2.0` (satay-runtime PR #102). cuttlefish's own
+  dependency bump and the steering implementation itself are still ahead.
+
 **Out.**
 
-- Automated context handover redesigned for a multi-agent team (slice C, was
-  B). V1's existing per-task handover (ADR-0004) keeps working unmodified;
-  making it work sensibly across three agents sharing or diverging on
-  context is explicitly a later slice's problem, not this one's.
-- Steerable chat - a human redirecting a running agent's work mid-task.
-  Confirmed buildable on satay's existing `wait_for_event`/`send_event`
-  primitive (see Open risks), but the workflow-shape work to actually use it
-  is slice C.
+- Steerable chat itself - a human redirecting a running agent's work
+  mid-task. The satay-side blocker is now resolved (Q42, satay `0.2.0`);
+  cuttlefish's own `--steerable`/`cuttlefish steer`/`SteeringMessage`
+  work (the workflow-shape racing a wait against normal progress) is real,
+  named, and still ahead, not attempted this slice (ADR-0007).
 - Any dashboard, office visualization, or UI of any kind (slice D, was C).
   This milestone has no observable surface beyond the existing CLI.
 - The runner/hosting abstraction and remote demo viewing (slice E, was D).
-- Actually running more than one project's delegation at a time, or any
-  scheduling/job-queue work that implies. This milestone still proves the
-  backend abstraction on the same one-task-at-a-time shape V1/V2 already
-  have; "many projects, many teams, concurrently" is slice C/D's problem and,
+- Actually running more than one *project's* delegation at a time, or any
+  scheduling/job-queue work that implies (distinct from one project's own
+  team of roles running concurrently, which slice C's team half now does).
+  "Many projects, many teams, concurrently" is slice C/D's problem and,
   underneath that, satay-runtime's own multi-worker milestone (see Open
-  risks).
+  risks) - unrelated to, and not needed by, one project's own
+  `satay.gather`-based team concurrency.
 - The meetings-with-avatar feature. Explicitly deferred to last, after
   everything else in this roadmap, by the operator's own instruction.
 - Any actual multi-tenancy, auth, or isolation-between-operators
   implementation. "Building toward a product" is a design constraint
   ADR-0002's 2026-09-20 addendum has to acknowledge, not something built in
   code yet.
-- Any change to satay-runtime's own codebase. This milestone's backend
-  abstraction doesn't need new satay capability; where a later slice will,
-  it's filed as a satay-runtime issue for that project's own roadmap, not
-  built inside this repo.
+- Any change to satay-runtime's own codebase *beyond a concrete, narrowly
+  scoped ask* (slice C's own `satay.control.run_app`, Q42, is the first
+  exception to slices A/B's "no satay changes needed" - filed and built
+  there directly, per the standing Q33 instruction, not worked around here).
 - A credential-broker/proxy (the agent never holds a raw secret at all, only
   a scoped local proxy does) - explicitly deferred by Q34's own reasoning,
   real future work once slice B's simpler direct-injection version's gaps
@@ -184,6 +207,9 @@ the operator actually babysits today.
 | R7 | A project/agent-scoped secrets store is encrypted at rest, scoped per project with an explicit shared scope, and an operator never configuring it gets today's exact V1/V2/slice-A behaviour unchanged. | Must-have (slice B) |
 | R8 | A declared secret is injected into both a sandboxed and a direct-host delegation, for both backends, through the same `_credential_envs` seam each backend already had - not a bolted-on second channel. | Must-have (slice B) |
 | R9 | A store-resolved secret value never becomes a satay-journaled task argument or return value, and the episodic journal's own redactor still catches it if it leaks back into a tool result. | Must-have (slice B) |
+| R10 | Several named roles' delegations against one project run genuinely concurrently, verified live, not just declared as such. | Must-have (slice C) |
+| R11 | Each role's own working-memory handover fires independently, undisturbed by another role sharing the same journal. | Must-have (slice C) |
+| R12 | A human can send a message that redirects a still-running delegation's work, not only read its history afterward. | Must-have (slice C, steering half - not yet built) |
 
 ## Shape
 
@@ -197,6 +223,9 @@ the operator actually babysits today.
 | S6 | An addendum to ADR-0002 (the multi-tenant trigger it named has fired) and a superseding ADR-0005 for ADR-0003 (multi-backend delegation) | ADR-0002 addendum, ADR-0005 |
 | S7 | `cuttlefish.secrets.SecretsStore` - an encrypted-at-rest, project-scoped key/value store (`.cuttlefish/secrets.db`), plus `cuttlefish secrets set/get/list/delete/generate-key` and `cuttlefish run --project/--secret` | ADR-0006 |
 | S8 | Each `AgentBackend`'s own `_credential_envs`/`CREDENTIAL_ENV_VARS` resolve a name from the store before `os.environ`; `run_kopicode`/`run_claude_code` gain an `env` parameter so a direct-host delegation gets the same injection a sandboxed one already had | ADR-0006 |
+| S9 | `cuttlefish.team.run_team` - N named roles' delegations fanned out via `satay.gather` under one shared `task_id`, every event tagged `role`; `cuttlefish run-team --role NAME:TASK_TEXT` | ADR-0007 |
+| S10 | `maybe_handover(..., role=...)` - the same algorithm, filtered to one role's own tagged events | ADR-0007 |
+| S11 | `satay.control.run_app` (satay-runtime PR #101/#102, satay `0.2.0`) - the control API composed into `run_app`'s own ergonomics, unblocking steering without a cuttlefish-side workaround | satay-runtime ADR-0046 |
 
 ## Affordances
 
@@ -205,7 +234,8 @@ the operator actually babysits today.
 | Affordance | Kind | Wires to |
 |------------|------|----------|
 | `CUTTLEFISH_AGENT_BACKEND=kopicode\|claude-code` | Config | Selects which `AgentBackend` implementation the delegation task routes through, the same pattern `CUTTLEFISH_SANDBOX` already established |
-| `cuttlefish run "<task>"` / `cuttlefish show <task-id>` | CLI commands | Unchanged in shape this milestone - the dashboard is slice C, not this one |
+| `cuttlefish run "<task>"` / `cuttlefish show <task-id>` | CLI commands | Unchanged in shape - the dashboard is slice D, not this one |
+| `cuttlefish run-team --role NAME:TASK_TEXT` (repeatable) | CLI command | Runs N named roles concurrently against one `--root`/`--project`, sharing one `task_id` (ADR-0007) |
 | `CUTTLEFISH_SECRETS_KEY` | Config | Opt-in, mirroring `CUTTLEFISH_SANDBOX`'s posture - unset means no `SecretsStore` at all, every credential still resolved from `os.environ` |
 | `cuttlefish run --project NAME --secret NAME` | CLI flags | Declares this task's secrets scope and which named secrets (beyond a backend's own ambient credential names) it may read (ADR-0006) |
 | `cuttlefish secrets generate-key\|set\|get\|list\|delete` | CLI commands | Manages the store directly - the only way to actually populate it |
@@ -256,34 +286,36 @@ E2B.
 | Q29 | The second backend proving pluggability is headless Claude Code, not a third tool. | Small - the interface doesn't care which second implementation proves it; swapping which tool goes second is additive. |
 | Q30 | The Python package import path stays `cuttlefish` while the repo/product/CLI branding become cuttlefish-crew externally. | Small now; if this project is ever published as an installable library under its own name, an import-path/product-name mismatch could confuse a new contributor - accepted for now, revisit if that happens. |
 | Q38 | A project's secrets scope is a plain string (`--project NAME`, defaulting to `--root`'s directory name) rather than waiting for a formal `Project` entity. | Small - a real `Project` entity (slice D) can be introduced later without changing the store's own schema (`scope` is already just a string); the cost is only that two different root paths for "the same" project must currently be named consistently by the operator, not inferred. |
+| Q44 | A team's roles all share one `--root`, so kopicode's own per-working-tree session lock means only one role's kopicode invocation can actually edit at a time in practice - real concurrent *editing* needs separate checkouts, not attempted this slice. | Moderate - the concurrency mechanism itself is real and verified (Q43); an operator who declares two kopicode-backed roles against one shared root today gets one succeeding and the other refused by kopicode's own lock, a real, visible failure rather than silent corruption, but not yet a smooth multi-checkout experience. |
 
 ## Open risks
 
-- **satay-runtime is no longer treated as a fixed external dependency.** As
-  of 2026-09-20 the operator has said satay's own roadmap should be driven
-  by cuttlefish-crew's needs going forward. Three concrete asks are already
-  filed against it rather than worked around here: satay-runtime#98 (a live
-  query primitive for in-progress workflow state), satay-runtime#99
-  (document/example the `wait_for_event`/`send_event` pattern for external
-  steering), and satay-runtime#100 (prioritize the Postgres Store +
-  multi-worker milestone ADR-0025 already earmarks). None of these block
-  this milestone; slice B needs #98/#99, and "many projects concurrently"
-  eventually needs #100.
-- **This pivot is bigger than slices A and B alone.** Slice C (multi-agent
-  handover + steerable chat), slice D (a dashboard, sketched as a
-  game-like pixel-art virtual office with a zoomed-out portfolio view for
-  scale), slice E (the runner/hosting abstraction unifying "tunnel to an
-  always-on machine" and "cuttlefish-crew provisions a hosted deployment
-  itself"), and a deferred, explicitly-last slice F (agent-initiated
-  meetings, TTS + avatar, facilitated through existing video-call
-  infrastructure rather than built from scratch) are all real, discussed,
-  and intended - slice B (ADR-0006) is now done: an encrypted-at-rest
-  secrets store, scoped per project with a shared fallback, injected
-  through each backend's own `_credential_envs` seam, no credential
-  broker/proxy yet. Slice B was inserted after slice A was first scoped,
-  once it became clear that multiple projects each needing distinct,
-  isolated credentials is a slice-A-adjacent pain, not a slice-E-hosting-only
-  one (Q34).
+- **satay-runtime is no longer treated as a fixed external dependency, and
+  slice C is the first time this actually happened.** satay-runtime#101
+  (ADR-0046 there, `satay.control.run_app`) closed the concrete gap slice
+  C's steering half hit - the control API had no way to compose into
+  `run_app`'s own ergonomics - and shipped as satay `0.2.0`
+  (satay-runtime#102). Two of the three asks named when this pivot started
+  remain open: satay-runtime#98 (a live query primitive - partially already
+  answered by the existing `ReadAPI`, per the research behind #101) and
+  satay-runtime#100 (the Postgres/multi-worker milestone, still not needed -
+  slice C's own team concurrency runs entirely within one process via
+  `satay.gather`, no multi-worker capability required at all). #99
+  (document/example external steering) is effectively superseded by #101's
+  own worked example.
+- **This pivot is bigger than slices A-C alone.** Slice D (a dashboard,
+  sketched as a game-like pixel-art virtual office with a zoomed-out
+  portfolio view for scale), slice E (the runner/hosting abstraction
+  unifying "tunnel to an always-on machine" and "cuttlefish-crew provisions
+  a hosted deployment itself"), and a deferred, explicitly-last slice F
+  (agent-initiated meetings, TTS + avatar, facilitated through existing
+  video-call infrastructure rather than built from scratch) are all real,
+  discussed, and intended. Slice B (ADR-0006) and slice C's team-concurrency
+  half (ADR-0007) are both now done; slice C's steering half is unblocked
+  but still ahead. Slice B was inserted after slice A was first scoped, once
+  it became clear that multiple projects each needing distinct, isolated
+  credentials is a slice-A-adjacent pain, not a slice-E-hosting-only one
+  (Q34).
 - **The product-ambition decision fires one of ADR-0002's two named
   triggers, not the one about spinning the sandbox out as its own
   product.** ADR-0002 named two independent triggers: whether the sandbox

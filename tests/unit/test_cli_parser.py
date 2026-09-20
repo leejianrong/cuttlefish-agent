@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from cuttlefish.cli import _parse_allow, build_parser
+from cuttlefish.cli import ConfigError, _parse_allow, _parse_roles, build_parser
 
 
 def test_parse_allow_defaults_to_empty() -> None:
@@ -68,3 +68,47 @@ def test_secrets_list_accepts_the_shared_scope() -> None:
 def test_secrets_generate_key_needs_no_scope() -> None:
     args = build_parser().parse_args(["secrets", "generate-key"])
     assert args.secrets_command == "generate-key"
+
+
+def test_run_team_accepts_repeated_role_flags() -> None:
+    args = build_parser().parse_args(
+        ["run-team", "--role", "builder:implement it", "--role", "reviewer:review it"]
+    )
+    assert args.role == ["builder:implement it", "reviewer:review it"]
+
+
+def test_run_team_role_defaults_to_none_when_omitted() -> None:
+    args = build_parser().parse_args(["run-team"])
+    assert args.role is None
+
+
+def test_parse_roles_splits_name_and_task_text_on_the_first_colon() -> None:
+    roles = _parse_roles(["builder:implement it", "reviewer:review it: carefully"])
+    assert roles == [
+        {"name": "builder", "text": "implement it"},
+        {"name": "reviewer", "text": "review it: carefully"},
+    ]
+
+
+def test_parse_roles_requires_at_least_one() -> None:
+    with pytest.raises(ConfigError, match="at least one"):
+        _parse_roles(None)
+    with pytest.raises(ConfigError, match="at least one"):
+        _parse_roles([])
+
+
+def test_parse_roles_rejects_a_value_with_no_colon() -> None:
+    with pytest.raises(ConfigError, match="NAME:TASK_TEXT"):
+        _parse_roles(["builder-implement-it"])
+
+
+def test_parse_roles_rejects_an_empty_name_or_text() -> None:
+    with pytest.raises(ConfigError, match="NAME:TASK_TEXT"):
+        _parse_roles([":implement it"])
+    with pytest.raises(ConfigError, match="NAME:TASK_TEXT"):
+        _parse_roles(["builder:"])
+
+
+def test_parse_roles_rejects_a_duplicate_name() -> None:
+    with pytest.raises(ConfigError, match="declared more than once"):
+        _parse_roles(["builder:implement it", "builder:implement it again"])

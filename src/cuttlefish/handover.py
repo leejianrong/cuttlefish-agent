@@ -72,7 +72,9 @@ def estimate_event_tokens(payload: EventPayload) -> int:
     return sum(estimate_tokens(text) for text in _texts(payload))
 
 
-async def maybe_handover(task_id: str, *, token_budget: int = DEFAULT_TOKEN_BUDGET) -> bool:
+async def maybe_handover(
+    task_id: str, *, token_budget: int = DEFAULT_TOKEN_BUDGET, role: str | None = None
+) -> bool:
     """Summarise and checkpoint if the window since the last handover is over budget.
 
     Reads the full episodic record via the durable ``read_episodic_events`` task
@@ -81,9 +83,21 @@ async def maybe_handover(task_id: str, *, token_budget: int = DEFAULT_TOKEN_BUDG
     and — only once that window's estimated size crosses `token_budget` — makes one
     bounded ``call_llm`` call to distill it, then journals the result. Returns
     whether a handover was written, so a caller (mainly a test) can assert it fired.
+
+    ``role`` (ADR-0007) narrows every step to events tagged with exactly this role
+    (``None`` for a plain, non-team run — the identical filter every event written
+    before slice C already satisfies, since none of them ever set a ``role``). A
+    team's own roles run concurrently and share one ``task_id``; without this filter
+    one role's own chatty journal could force another's window closed early, or its
+    own ``HandoverWritten`` could wrongly suppress a different role's next one.
     """
     raw_events = await read_episodic_events(task_id)
-    decoded = [(raw["seq"], decode_payload(raw["event_type"], raw["data"])) for raw in raw_events]
+    all_decoded = (
+        (raw["seq"], decode_payload(raw["event_type"], raw["data"])) for raw in raw_events
+    )
+    decoded = [
+        (seq, payload) for seq, payload in all_decoded if getattr(payload, "role", None) == role
+    ]
 
     last_handover_seq = 0
     for seq, payload in decoded:
@@ -108,6 +122,7 @@ async def maybe_handover(task_id: str, *, token_budget: int = DEFAULT_TOKEN_BUDG
             summary=summary,
             covers_seq_from=window[0][0],
             covers_seq_to=window[-1][0],
+            role=role,
         ),
     )
     return True
