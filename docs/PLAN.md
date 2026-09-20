@@ -2,13 +2,15 @@
 
 Status: agreed and delivered - slice A (pluggable agent backend + rename,
 PR #21), slice B (project/agent-scoped secrets management, ADR-0006), and
-slice C's team-concurrency half (`cuttlefish run-team`, ADR-0007) are all
-complete and merged. Supersedes the single-task-MVP framing this document
-held through V1/V2 (both complete, both merged to `main` - see
-`CLAUDE.md`'s "What's built" for that history, which stays true and is not
-being redone, only built on). Slice C's steering half is unblocked
-(satay `0.2.0` ships the needed capability, ADR-0007/Q42) but not yet built
-in cuttlefish itself - next up per `docs/SLICES.md`.
+slice C in full - both the team-concurrency half (`cuttlefish run-team`,
+ADR-0007) and the steering half (`cuttlefish run --steerable`/`run-team
+--steerable`/`cuttlefish steer`, ADR-0008) - are all complete and merged.
+Supersedes the single-task-MVP framing this document held through V1/V2
+(both complete, both merged to `main` - see `CLAUDE.md`'s "What's built" for
+that history, which stays true and is not being redone, only built on).
+Slice C's steering half redirects at a delegation round's boundary, not
+mid-flight (ADR-0008's own honestly-named limit) - next up per
+`docs/SLICES.md` is slice D, the dashboard/office UI.
 
 ## Problem
 
@@ -154,16 +156,28 @@ the operator actually babysits today.
   interactive-session model. Filed and built directly in satay-runtime
   (satay-runtime PR #101, ADR-0046 there) rather than worked around inside
   this repo, per the standing Q33 instruction - `satay.control.run_app`,
-  shipped as satay `0.2.0` (satay-runtime PR #102). cuttlefish's own
-  dependency bump and the steering implementation itself are still ahead.
+  shipped as satay `0.2.0` (satay-runtime PR #102).
+- **Slice C's steering half (ADR-0008):** `cuttlefish run --steerable`/
+  `run-team --steerable` open `satay.control.run_app` instead of a bare
+  `run_app`, print a `base_url`/token, and publish a local pointer file
+  (`.cuttlefish/steering/<task-id>.json`); `cuttlefish steer <task-id>
+  "<message>" [--role NAME]` is a thin HTTP client reading that file and
+  `POST`ing to satay's own control API. A steerable task/team role becomes a
+  loop of delegation rounds - after each round's own outcome is journaled, a
+  single, plain `satay.wait_for_event(SteeringMessage, ...)` poll decides
+  whether to fold a queued message into one more round or finalize exactly
+  as a non-steerable task always has. **Redirects at a round's boundary, not
+  mid-flight** - real design research found neither backend's headless
+  surface accepts input after it starts, and racing `wait_for_event` against
+  an in-flight delegation via `satay.gather` is an unverified composition of
+  satay's own primitives (`WorkflowParked` unwinds the whole workflow drive,
+  not one `gather` member) - named honestly as this slice's real limit, not
+  discovered as a surprise later. Verified live (2026-09-21) against the
+  real kopicode binary: a message sent mid-round starts a fresh round with
+  it folded into the prompt, and a role nobody steers finalizes untouched.
 
 **Out.**
 
-- Steerable chat itself - a human redirecting a running agent's work
-  mid-task. The satay-side blocker is now resolved (Q42, satay `0.2.0`);
-  cuttlefish's own `--steerable`/`cuttlefish steer`/`SteeringMessage`
-  work (the workflow-shape racing a wait against normal progress) is real,
-  named, and still ahead, not attempted this slice (ADR-0007).
 - Any dashboard, office visualization, or UI of any kind (slice D, was C).
   This milestone has no observable surface beyond the existing CLI.
 - The runner/hosting abstraction and remote demo viewing (slice E, was D).
@@ -209,7 +223,7 @@ the operator actually babysits today.
 | R9 | A store-resolved secret value never becomes a satay-journaled task argument or return value, and the episodic journal's own redactor still catches it if it leaks back into a tool result. | Must-have (slice B) |
 | R10 | Several named roles' delegations against one project run genuinely concurrently, verified live, not just declared as such. | Must-have (slice C) |
 | R11 | Each role's own working-memory handover fires independently, undisturbed by another role sharing the same journal. | Must-have (slice C) |
-| R12 | A human can send a message that redirects a still-running delegation's work, not only read its history afterward. | Must-have (slice C, steering half - not yet built) |
+| R12 | A human can send a message that redirects a still-running delegation's work, not only read its history afterward. | Delivered (slice C, steering half, ADR-0008) - redirects at a delegation round's boundary, not mid-flight |
 
 ## Shape
 
@@ -226,6 +240,7 @@ the operator actually babysits today.
 | S9 | `cuttlefish.team.run_team` - N named roles' delegations fanned out via `satay.gather` under one shared `task_id`, every event tagged `role`; `cuttlefish run-team --role NAME:TASK_TEXT` | ADR-0007 |
 | S10 | `maybe_handover(..., role=...)` - the same algorithm, filtered to one role's own tagged events | ADR-0007 |
 | S11 | `satay.control.run_app` (satay-runtime PR #101/#102, satay `0.2.0`) - the control API composed into `run_app`'s own ergonomics, unblocking steering without a cuttlefish-side workaround | satay-runtime ADR-0046 |
+| S12 | `SteeringMessage` (doubles as satay's own wire payload type and the journaled episodic event) plus `cuttlefish.steering`'s round-boundary poll loop in `run_task`/`run_team`; `cuttlefish run --steerable`/`run-team --steerable` (open `satay.control.run_app`, print `base_url`/token, publish `.cuttlefish/steering/<task-id>.json`) and `cuttlefish steer <task-id> "<message>" [--role NAME]` (an HTTP client over that pointer file) | ADR-0008 |
 
 ## Affordances
 
@@ -236,6 +251,8 @@ the operator actually babysits today.
 | `CUTTLEFISH_AGENT_BACKEND=kopicode\|claude-code` | Config | Selects which `AgentBackend` implementation the delegation task routes through, the same pattern `CUTTLEFISH_SANDBOX` already established |
 | `cuttlefish run "<task>"` / `cuttlefish show <task-id>` | CLI commands | Unchanged in shape - the dashboard is slice D, not this one |
 | `cuttlefish run-team --role NAME:TASK_TEXT` (repeatable) | CLI command | Runs N named roles concurrently against one `--root`/`--project`, sharing one `task_id` (ADR-0007) |
+| `cuttlefish run --steerable` / `run-team --steerable` | CLI flags | Opens `satay.control.run_app` instead of a bare `run_app`, prints `base_url`/token, publishes `.cuttlefish/steering/<task-id>.json` (ADR-0008) |
+| `cuttlefish steer <task-id> "<message>" [--role NAME]` | CLI command | Delivers one `SteeringMessage` to a still-running `--steerable` task/role - redirects at the next delegation round's boundary, not mid-flight (ADR-0008) |
 | `CUTTLEFISH_SECRETS_KEY` | Config | Opt-in, mirroring `CUTTLEFISH_SANDBOX`'s posture - unset means no `SecretsStore` at all, every credential still resolved from `os.environ` |
 | `cuttlefish run --project NAME --secret NAME` | CLI flags | Declares this task's secrets scope and which named secrets (beyond a backend's own ambient credential names) it may read (ADR-0006) |
 | `cuttlefish secrets generate-key\|set\|get\|list\|delete` | CLI commands | Manages the store directly - the only way to actually populate it |
@@ -290,6 +307,16 @@ E2B.
 
 ## Open risks
 
+- **Steering redirects at a delegation round's boundary, not mid-flight
+  (ADR-0008).** A message sent while a real coding-agent invocation is
+  running waits for that invocation's own natural end before it's ever
+  seen - a bound that can be minutes for a real task, named honestly rather
+  than discovered as a surprise. Closing it further needs either a backend
+  gaining a genuine live-input surface (neither kopicode nor headless Claude
+  Code has one today) or a verified, satay-runtime-provided way to race
+  `wait_for_event` against an in-flight task (ADR-0008 found the naive
+  `satay.gather` composition unverified) - real future work, not attempted
+  speculatively ahead of either existing.
 - **satay-runtime is no longer treated as a fixed external dependency, and
   slice C is the first time this actually happened.** satay-runtime#101
   (ADR-0046 there, `satay.control.run_app`) closed the concrete gap slice
@@ -311,8 +338,8 @@ E2B.
   (agent-initiated meetings, TTS + avatar, facilitated through existing
   video-call infrastructure rather than built from scratch) are all real,
   discussed, and intended. Slice B (ADR-0006) and slice C's team-concurrency
-  half (ADR-0007) are both now done; slice C's steering half is unblocked
-  but still ahead. Slice B was inserted after slice A was first scoped, once
+  half (ADR-0007) and steering half (ADR-0008) are all now done. Slice B was
+  inserted after slice A was first scoped, once
   it became clear that multiple projects each needing distinct, isolated
   credentials is a slice-A-adjacent pain, not a slice-E-hosting-only one
   (Q34).

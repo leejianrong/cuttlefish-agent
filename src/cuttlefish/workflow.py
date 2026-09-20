@@ -22,12 +22,14 @@ from cuttlefish.episodic.events import (
     DelegationFailed,
     DelegationRefused,
     DelegationStarted,
+    SteeringMessage,
     TaskCompleted,
     TaskFailed,
     TaskSubmitted,
 )
 from cuttlefish.handover import DEFAULT_TOKEN_BUDGET, maybe_handover
 from cuttlefish.secrets.store import DEFAULT_PROJECT
+from cuttlefish.steering import DEFAULT_STEERING_GRACE_SECONDS, compose_steered_text, steering_key
 from cuttlefish.tasks.delegate import delegate_to_agent_backend
 from cuttlefish.tasks.journal import journal
 
@@ -54,6 +56,16 @@ class TaskInput(TypedDict):
     ``secrets.store.DEFAULT_PROJECT``/an empty list — a task that declares
     neither reads no project-scoped secret at all, and every backend's own
     credential still resolves from ``os.environ`` exactly as it always has.
+
+    ``steerable`` (ADR-0008) is optional and defaults to ``False`` — a task that
+    doesn't opt in runs exactly one delegation round, byte-for-byte as it always
+    has (no extra ``wait_for_event`` call, no behavioural change at all). Opting
+    in polls for a queued ``SteeringMessage`` after each round's outcome and, on
+    a hit, runs one more round with it folded in — see ``cuttlefish.steering``
+    and ADR-0008 for why this is a round-boundary redirect, not a mid-flight one.
+    ``steering_grace`` overrides ``steering.DEFAULT_STEERING_GRACE_SECONDS`` — a
+    test lowers it to assert a "no one steered" finalization deterministically
+    rather than waiting out a real several-second grace window.
     """
 
     task_id: str
@@ -63,6 +75,8 @@ class TaskInput(TypedDict):
     allow: NotRequired[list[list[str]]]
     project: NotRequired[str]
     secret_names: NotRequired[list[str]]
+    steerable: NotRequired[bool]
+    steering_grace: NotRequired[float]
 
 
 @satay.workflow
@@ -74,6 +88,8 @@ async def run_task(task_input: TaskInput) -> dict[str, Any]:
     allow = task_input.get("allow", DEFAULT_SHELL_ALLOWLIST)
     project = task_input.get("project", DEFAULT_PROJECT)
     secret_names = task_input.get("secret_names", [])
+    steerable = task_input.get("steerable", False)
+    steering_grace = task_input.get("steering_grace", DEFAULT_STEERING_GRACE_SECONDS)
 
     await journal(task_id, TaskSubmitted(text=text))
     await maybe_handover(task_id, token_budget=token_budget)
@@ -88,42 +104,75 @@ async def run_task(task_input: TaskInput) -> dict[str, Any]:
     runtime_ = runtime.current()
     sandbox_provider = runtime_.sandbox_provider
     sandbox_name = sandbox_provider.BACKEND_NAME if sandbox_provider is not None else None
-    await journal(
-        task_id,
-        DelegationStarted(
-            task_text=text,
-            root=root,
-            policy_allow=allow,
-            sandbox=sandbox_name,
-            backend=runtime_.agent_backend,
-            project=project,
-            secret_names=secret_names,
-        ),
-    )
 
-    try:
-        outcome = await delegate_to_agent_backend(
-            text, root, allow=allow, project=project, secret_names=secret_names
-        )
-    except DelegationError as exc:
-        # A plain (non-collected) awaited task's failure re-raises the task body's
-        # own exception type unchanged — satay.TaskFailedError only wraps a
-        # collect-mode (map/gather return_exceptions=True) failure, which this call
-        # isn't (satay's replay/engine.py _execute: `if ... or not
-        # _COLLECTING.get(): raise`). So this catches DelegationError itself, not a
-        # satay wrapper around it.
-        reason = str(exc)
-        await journal(task_id, DelegationFailed(reason=reason))
-        await maybe_handover(task_id, token_budget=token_budget)
-        await journal(task_id, TaskFailed(error=reason))
-        return {"status": "failed", "error": reason}
-
-    if outcome.kind == "completed":
+    # Round-boundary steering (ADR-0008): a non-steerable task runs this loop's
+    # body exactly once, then falls through below -- byte-for-byte the same
+    # single-delegation shape this workflow always had.
+    current_text = text
+    round_summaries: list[str] = []
+    while True:
         await journal(
             task_id,
-            DelegationCompleted(summary=outcome.summary, edited_paths=outcome.edited_paths),
+            DelegationStarted(
+                task_text=current_text,
+                root=root,
+                policy_allow=allow,
+                sandbox=sandbox_name,
+                backend=runtime_.agent_backend,
+                project=project,
+                secret_names=secret_names,
+            ),
         )
-        await maybe_handover(task_id, token_budget=token_budget)
+
+        try:
+            outcome = await delegate_to_agent_backend(
+                current_text, root, allow=allow, project=project, secret_names=secret_names
+            )
+        except DelegationError as exc:
+            # A plain (non-collected) awaited task's failure re-raises the task body's
+            # own exception type unchanged — satay.TaskFailedError only wraps a
+            # collect-mode (map/gather return_exceptions=True) failure, which this call
+            # isn't (satay's replay/engine.py _execute: `if ... or not
+            # _COLLECTING.get(): raise`). So this catches DelegationError itself, not a
+            # satay wrapper around it. An infra-level failure like this one is never
+            # steered around (ADR-0008) -- it fails the task immediately, the same as
+            # it always has.
+            reason = str(exc)
+            await journal(task_id, DelegationFailed(reason=reason))
+            await maybe_handover(task_id, token_budget=token_budget)
+            await journal(task_id, TaskFailed(error=reason))
+            return {"status": "failed", "error": reason}
+
+        if outcome.kind == "completed":
+            await journal(
+                task_id,
+                DelegationCompleted(summary=outcome.summary, edited_paths=outcome.edited_paths),
+            )
+        elif outcome.kind == "refused":
+            await journal(task_id, DelegationRefused(reason=outcome.reason or outcome.summary))
+        else:
+            await journal(task_id, DelegationFailed(reason=outcome.reason or outcome.summary))
+
+        if not steerable:
+            break
+
+        steer_event = await satay.wait_for_event(
+            SteeringMessage,
+            key=steering_key(task_id, None),
+            timeout=steering_grace,
+        )
+        if steer_event is None:
+            break
+
+        await journal(task_id, steer_event)
+        round_summaries.append(
+            outcome.summary if outcome.kind == "completed" else (outcome.reason or outcome.summary)
+        )
+        current_text = compose_steered_text(text, round_summaries, steer_event.text)
+
+    await maybe_handover(task_id, token_budget=token_budget)
+
+    if outcome.kind == "completed":
         await journal(task_id, TaskCompleted(result=outcome.summary))
         return {
             "status": "completed",
@@ -132,10 +181,5 @@ async def run_task(task_input: TaskInput) -> dict[str, Any]:
         }
 
     reason = outcome.reason or outcome.summary
-    if outcome.kind == "refused":
-        await journal(task_id, DelegationRefused(reason=reason))
-    else:
-        await journal(task_id, DelegationFailed(reason=reason))
-    await maybe_handover(task_id, token_budget=token_budget)
     await journal(task_id, TaskFailed(error=reason))
     return {"status": "failed", "error": reason}
