@@ -1,10 +1,11 @@
 # cuttlefish-crew: Plan
 
-Status: agreed - Milestone: pivot slice A (pluggable agent backend + rename),
-first slice of the cuttlefish-crew direction. Supersedes the single-task-MVP
-framing this document held through V1/V2 (both complete, both merged to
-`main` - see `CLAUDE.md`'s Build status for that history, which stays true
-and is not being redone, only built on).
+Status: agreed and delivered - slice A (pluggable agent backend + rename),
+the first slice of the cuttlefish-crew direction, is complete and merged
+(PR #21). Supersedes the single-task-MVP framing this document held through
+V1/V2 (both complete, both merged to `main` - see `CLAUDE.md`'s "What's
+built" for that history, which stays true and is not being redone, only
+built on). Next up per `docs/SLICES.md`: slice B, secrets management.
 
 ## Problem
 
