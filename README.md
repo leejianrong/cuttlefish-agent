@@ -79,6 +79,20 @@ echo "hf_..." | uv run cuttlefish secrets set --project demo HUGGINGFACE_TOKEN
 uv run cuttlefish run "..." --project demo --secret HUGGINGFACE_TOKEN
 ```
 
+Run several named roles concurrently against one project, each independently
+handed over and journaled under its own `role` tag:
+
+```bash
+uv run cuttlefish run-team \
+  --role builder:"implement the login form" \
+  --role reviewer:"review the last commit for style issues"
+```
+
+Roles sharing a kopicode-backed `--root` really do start concurrently, but
+kopicode's own per-working-tree session lock means only one can actually edit
+at a time today — a real, named gap, not silent corruption (see
+`docs/adr/0007-...md`).
+
 ## Configuration
 
 | Variable | Default | What it does |

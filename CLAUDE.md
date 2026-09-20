@@ -20,7 +20,7 @@ doc comment all beat a paragraph here.
 
 - [`docs/PLAN.md`](docs/PLAN.md) — the current problem, scope, and shape
   (the cuttlefish-crew pivot direction, built on top of V1/V2's original MVP)
-- [`docs/adr/`](docs/adr/) — why each load-bearing decision was made, 0001–0006
+- [`docs/adr/`](docs/adr/) — why each load-bearing decision was made, 0001–0007
 - [`docs/SLICES.md`](docs/SLICES.md) — the build order this was built against
 - [`docs/QUESTIONS.md`](docs/QUESTIONS.md) — every decision, who made it, and
   where it landed, including gaps a live run surfaced after the fact
@@ -31,15 +31,20 @@ doc comment all beat a paragraph here.
 
 V1, V2 (a durable, sandboxed kopicode delegation), slice A (the pluggable
 `AgentBackend` seam — `KopicodeBackend` and `ClaudeCodeBackend`, selected via
-`CUTTLEFISH_AGENT_BACKEND`), and slice B (`cuttlefish.secrets.SecretsStore` —
+`CUTTLEFISH_AGENT_BACKEND`), slice B (`cuttlefish.secrets.SecretsStore` —
 an encrypted-at-rest, project-scoped secrets store injected through each
-backend's own `_credential_envs`) are complete and merged; `make ci` is
-green on `main`. Start reading the code at `cuttlefish/workflow.py` (the
-core loop), `cuttlefish/agents/` (the backend seam), and
-`cuttlefish/secrets/` (the secrets store) — each module's own doc comment
-explains why it exists, not a list here. Live-verification history and real
-bugs a live run found and fixed are in each PR's own description and
-`docs/QUESTIONS.md`, not repeated here.
+backend's own `_credential_envs`), and slice C's team-concurrency half
+(`cuttlefish.team.run_team` — N named roles delegating concurrently via
+`satay.gather`, `cuttlefish run-team --role NAME:TASK_TEXT`) are complete
+and merged; `make ci` is green on `main`. Slice C's steering half is
+unblocked (satay `0.2.0` ships `satay.control.run_app`, satay-runtime PR
+#101/#102) but not yet built here. Start reading the code at
+`cuttlefish/workflow.py` (the single-task core loop),
+`cuttlefish/team.py` (the multi-role loop), `cuttlefish/agents/` (the
+backend seam), and `cuttlefish/secrets/` (the secrets store) — each
+module's own doc comment explains why it exists, not a list here.
+Live-verification history and real bugs a live run found and fixed are in
+each PR's own description and `docs/QUESTIONS.md`, not repeated here.
 
 ## Known, accepted gaps — don't re-litigate
 
@@ -49,10 +54,17 @@ bugs a live run found and fixed are in each PR's own description and
 - Its declared-allowlist-to-`--allowedTools` mapping is an honest
   approximation, not full parity with kopicode's KAN-987 policy gate.
   `docs/QUESTIONS.md` Q36.
-- satay-runtime is one process, one writer — no two cuttlefish tasks run
-  concurrently yet. satay-runtime's own roadmap now follows cuttlefish-crew's
-  needs rather than being a fixed dependency; a concrete need gets filed as
-  an issue there, not worked around here. `docs/QUESTIONS.md` Q33.
+- satay-runtime is one process, one writer — no two *projects'* cuttlefish
+  tasks run concurrently yet (one project's own team of roles does, via
+  `satay.gather`, needing no multi-worker capability at all). satay-runtime's
+  own roadmap now follows cuttlefish-crew's needs rather than being a fixed
+  dependency; a concrete need gets filed — and, as of slice C, actually
+  built — there, not worked around here. `docs/QUESTIONS.md` Q33, Q42.
+- Two kopicode-backed team roles sharing one `--root` collide on kopicode's
+  own per-working-tree session lock — real concurrent *editing* needs
+  separate checkouts per role, not built yet. Not a bug; kopicode's lock is
+  correctly guarding against two agents editing one uncommitted working
+  tree at once. `docs/QUESTIONS.md` Q44.
 - Secrets are injected directly, never brokered — the agent process itself
   still holds every secret it's given in the clear, inside its own sandbox
   or subprocess. A credential-broker/proxy is real future work, deliberately

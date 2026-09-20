@@ -17,6 +17,7 @@ import shlex
 import shutil
 import sys
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 import satay
@@ -38,6 +39,7 @@ from cuttlefish.secrets.store import (
     SecretsStore,
     generate_key,
 )
+from cuttlefish.team import RoleInput, run_team
 from cuttlefish.workflow import run_task
 
 # Loaded once, at import time, not inside main(): main() also runs in-process in
@@ -213,12 +215,44 @@ def _resolve_project_secrets(
     return resolved
 
 
-async def _run(args: argparse.Namespace) -> int:
+@dataclass(frozen=True, slots=True)
+class _PreparedRun:
+    """Every config seam `run` and `run-team` both resolve identically before
+    starting their own workflow — factored out once both needed it (ADR-0007)."""
+
+    kopicode_binary: str
+    claude_code_binary: str
+    agent_backend: str
+    llm_provider: LlmProvider
+    sandbox_provider: SandboxProvider | None
+    secrets_store: SecretsStore | None
+    episodic_store: EpisodicStore
+
+    def close(self) -> None:
+        self.episodic_store.close()
+        if self.secrets_store is not None:
+            self.secrets_store.close()
+
+    def as_runtime(self) -> runtime.Runtime:
+        return runtime.Runtime(
+            episodic_store=self.episodic_store,
+            llm_provider=self.llm_provider,
+            kopicode_binary=self.kopicode_binary,
+            claude_code_binary=self.claude_code_binary,
+            agent_backend=self.agent_backend,
+            sandbox_provider=self.sandbox_provider,
+            secrets_store=self.secrets_store,
+        )
+
+
+def _prepare_run(*, project: str, secret_names: list[str]) -> _PreparedRun:
+    """Resolve the backend, LLM provider, sandbox, secrets store, and a
+    secrets-aware redactor — or raise `ConfigError`, closing any secrets store
+    already opened first, so a caller only has to print the error and return
+    `EXIT_CONFIG_ERROR`, no further cleanup required.
+    """
     kopicode_binary = _resolve_kopicode_binary()
     claude_code_binary = _resolve_claude_code_binary()
-    root = str(Path(args.root).resolve()) if args.root else str(Path.cwd())
-    project = args.project if args.project else Path(root).name
-    secret_names = sorted(set(args.secret or []))
 
     secrets_store = None
     try:
@@ -239,11 +273,10 @@ async def _run(args: argparse.Namespace) -> int:
             project=project,
             secret_names=secret_names,
         )
-    except ConfigError as exc:
-        print(f"cuttlefish: {exc}", file=sys.stderr)
+    except ConfigError:
         if secrets_store is not None:
             secrets_store.close()
-        return EXIT_CONFIG_ERROR
+        raise
 
     # A store-resolved secret never touches os.environ (ADR-0006), so the
     # redactor's own default (env-only) lookup would silently miss it -- fall
@@ -256,18 +289,34 @@ async def _run(args: argparse.Namespace) -> int:
         Path.cwd() / ".cuttlefish" / "episodic.db",
         redactor=Redactor(redaction_names, lookup=_redaction_lookup),
     )
-    runtime.configure(
-        runtime.Runtime(
-            episodic_store=episodic_store,
-            llm_provider=llm_provider,
-            kopicode_binary=kopicode_binary,
-            claude_code_binary=claude_code_binary,
-            agent_backend=agent_backend,
-            sandbox_provider=sandbox_provider,
-            secrets_store=secrets_store,
-        )
+    return _PreparedRun(
+        kopicode_binary=kopicode_binary,
+        claude_code_binary=claude_code_binary,
+        agent_backend=agent_backend,
+        llm_provider=llm_provider,
+        sandbox_provider=sandbox_provider,
+        secrets_store=secrets_store,
+        episodic_store=episodic_store,
     )
 
+
+def _resolve_root_and_project(args: argparse.Namespace) -> tuple[str, str]:
+    root = str(Path(args.root).resolve()) if args.root else str(Path.cwd())
+    project = args.project if args.project else Path(root).name
+    return root, project
+
+
+async def _run(args: argparse.Namespace) -> int:
+    root, project = _resolve_root_and_project(args)
+    secret_names = sorted(set(args.secret or []))
+
+    try:
+        prepared = _prepare_run(project=project, secret_names=secret_names)
+    except ConfigError as exc:
+        print(f"cuttlefish: {exc}", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+
+    runtime.configure(prepared.as_runtime())
     task_id = str(uuid.uuid4())
 
     try:
@@ -291,11 +340,74 @@ async def _run(args: argparse.Namespace) -> int:
         print(json.dumps({"task_id": task_id, "status": "error", "error": str(exc)}))
         return EXIT_WORKFLOW_ERROR
     finally:
-        episodic_store.close()
-        if secrets_store is not None:
-            secrets_store.close()
+        prepared.close()
 
     print(json.dumps({"task_id": task_id, **result}))
+    return EXIT_OK if result["status"] == "completed" else EXIT_TASK_FAILED
+
+
+def _parse_roles(values: list[str] | None) -> list[RoleInput]:
+    """Each ``--role`` value is ``NAME:TASK_TEXT``, split on the first ``:`` (ADR-0007).
+    Requires at least one; a name declared twice is a config error, not a silent
+    overwrite of the first role's own task text.
+    """
+    if not values:
+        raise ConfigError("run-team needs at least one --role NAME:TASK_TEXT")
+    roles: list[RoleInput] = []
+    seen: set[str] = set()
+    for value in values:
+        name, sep, text = value.partition(":")
+        name, text = name.strip(), text.strip()
+        if not sep or not name or not text:
+            raise ConfigError(f"--role {value!r} must be NAME:TASK_TEXT")
+        if name in seen:
+            raise ConfigError(f"--role name {name!r} was declared more than once")
+        seen.add(name)
+        roles.append({"name": name, "text": text})
+    return roles
+
+
+async def _run_team(args: argparse.Namespace) -> int:
+    root, project = _resolve_root_and_project(args)
+    secret_names = sorted(set(args.secret or []))
+
+    try:
+        roles = _parse_roles(args.role)
+        prepared = _prepare_run(project=project, secret_names=secret_names)
+    except ConfigError as exc:
+        print(f"cuttlefish: {exc}", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+
+    runtime.configure(prepared.as_runtime())
+    team_id = str(uuid.uuid4())
+    allow = _parse_allow(args.allow)
+    role_inputs: list[RoleInput] = [
+        {"name": role["name"], "text": role["text"], "allow": allow, "secret_names": secret_names}
+        for role in roles
+    ]
+
+    try:
+        async with satay.run_app() as store:
+            handle = satay.start(
+                run_team,
+                {
+                    "team_id": team_id,
+                    "root": root,
+                    "project": project,
+                    "roles": role_inputs,
+                    "token_budget": args.token_budget,
+                },
+                run_id=team_id,
+                store=store,
+            )
+            result = await handle.result()
+    except satay.WorkflowFailedError as exc:
+        print(json.dumps({"team_id": team_id, "status": "error", "error": str(exc)}))
+        return EXIT_WORKFLOW_ERROR
+    finally:
+        prepared.close()
+
+    print(json.dumps({"team_id": team_id, **result}))
     return EXIT_OK if result["status"] == "completed" else EXIT_TASK_FAILED
 
 
@@ -415,6 +527,50 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    run_team_parser = subparsers.add_parser(
+        "run-team", help="Run several named roles concurrently against one project (ADR-0007)"
+    )
+    run_team_parser.add_argument(
+        "--role",
+        action="append",
+        metavar="NAME:TASK_TEXT",
+        help=(
+            "One role: a name and its own task text, separated by the first ':' "
+            "(e.g. --role builder:'implement the login form'). Repeatable; at "
+            "least one is required."
+        ),
+    )
+    run_team_parser.add_argument(
+        "--root",
+        default=None,
+        help="The repository or scratch checkout every role delegates against (default: CWD)",
+    )
+    run_team_parser.add_argument(
+        "--token-budget",
+        type=int,
+        default=DEFAULT_TOKEN_BUDGET,
+        help="Working-memory handover threshold per role, in estimated tokens",
+    )
+    run_team_parser.add_argument(
+        "--allow",
+        action="append",
+        metavar="CMD",
+        help=(
+            "One shell command every role may run inside --root. Repeatable. Applies to all roles."
+        ),
+    )
+    run_team_parser.add_argument(
+        "--project",
+        default=None,
+        help="Every role's shared secrets scope (ADR-0006). Default: --root's own directory name.",
+    )
+    run_team_parser.add_argument(
+        "--secret",
+        action="append",
+        metavar="NAME",
+        help="One named secret every role may read (ADR-0006). Repeatable. Applies to all roles.",
+    )
+
     show_parser = subparsers.add_parser("show", help="Render one task's full episodic record")
     show_parser.add_argument("task_id", help="The task id (the satay run id it was started with)")
 
@@ -450,6 +606,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "run":
         return asyncio.run(_run(args))
+    if args.command == "run-team":
+        return asyncio.run(_run_team(args))
     if args.command == "secrets":
         return _secrets(args)
     return _show(args)

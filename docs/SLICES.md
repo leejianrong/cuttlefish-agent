@@ -148,9 +148,11 @@ V1 and V2 proved one durable, sandboxed delegation to kopicode. V3 is the
 pivot: cuttlefish becomes cuttlefish-crew, a fleet manager running teams of
 coding sub-agents across many projects at once. See `docs/PLAN.md` for the
 full problem/solution and `docs/QUESTIONS.md` Q28 onward for the decisions
-behind it. Slices A and B are built; slices C-F are named and real but not
-yet planned in this file - each gets its own build plan once the slice
-before it ships and the interface it needs actually exists.
+behind it. Slices A and B are built; slice C's team-concurrency half is
+built and its steering half is unblocked but not yet built; slices D-F are
+named and real but not yet planned in this file - each gets its own build
+plan once the slice before it ships and the interface it needs actually
+exists.
 
 ### Slice A: a pluggable agent backend, and the external rebrand
 
@@ -302,15 +304,104 @@ own `scope` column meaning need to change; the store's schema doesn't.
   preserved); a non-empty mapping merges over a copy of `os.environ`,
   overriding a same-named ambient value.
 
-### Slices C-F: not yet fully planned
+### Slice C: multi-agent team concurrency (done), steerable chat (unblocked, not yet built)
+
+**Delivers:** `docs/PLAN.md`'s R10-R11 (team concurrency); R12 (steering)
+remains open.
+
+**Build plan (team-concurrency half, done)**
+
+1. `cuttlefish.team.run_team` (ADR-0007): N named roles' delegations, run
+   concurrently via `satay.gather(..., return_exceptions=True)`, sharing one
+   `task_id` rather than one satay run per role — `start_child` can't hand a
+   parent a child's run id before that child's first journal write, so a
+   second identity scheme was rejected in favour of a `role` tag on every
+   event a role writes.
+2. `role: str | None = None` added to `TaskSubmitted`, `DelegationStarted`,
+   `DelegationCompleted`, `DelegationRefused`, `DelegationFailed`,
+   `HandoverWritten`, `TaskCompleted`, `TaskFailed` — defaulting to `None`,
+   so every event written before this slice (and every plain `cuttlefish
+   run` after it) decodes and behaves unchanged.
+3. `cuttlefish.handover.maybe_handover` gained a `role` filter: the same
+   algorithm, narrowed to one role's own tagged events (including `None`)
+   so one role's journal can't force another's window closed early, or
+   suppress its next handover.
+4. `cuttlefish run-team --role NAME:TASK_TEXT` (repeatable, at least one
+   required); `--root`/`--project`/`--allow`/`--secret`/`--token-budget`
+   apply to every role uniformly this slice (no per-role policy
+   differentiation yet).
+5. `cuttlefish.cli`'s config resolution (backend/LLM/sandbox/secrets/
+   redactor) factored into `_prepare_run`/`_PreparedRun`, shared by `run`
+   and `run-team` rather than duplicated.
+
+**Demo:** `cuttlefish run-team --role builder:"add a .gitignore entry"
+--role reviewer:"check the .gitignore entry is correct"` — both roles'
+delegations start together, journaled under one `task_id` with `role` on
+every event; `cuttlefish show <task_id>` renders both interleaved.
+
+**Verified live, 2026-09-20:**
+- Real concurrency, not a declared-but-serial fan-out: two roles pointed at
+  a deliberately-slow fake backend binary completed in one sleep's
+  duration, not two.
+- A real, accepted gap: two kopicode-backed roles sharing one `--root`
+  collide on kopicode's own per-working-tree session lock — the second
+  role's kopicode process starts concurrently, then immediately refuses
+  ("another kopicode session is already running in this working tree").
+  Not a bug to route around (Q44) — real concurrent *editing* needs
+  separate checkouts per role, not attempted this slice.
+
+**Rests on assumptions:** Q43 (real concurrency, not just a per-role
+mechanism, was the right scope for this slice) and Q44 (naming the
+kopicode-lock gap rather than building worktree isolation to close it) —
+if wrong, a later slice needs to add per-role root/checkout support before
+"a team" is useful against kopicode for anything that actually edits files.
+
+### Test plan (team-concurrency half)
+
+#### End-to-end
+
+- `cuttlefish run-team` with two roles reaches a terminal state and prints
+  a JSON result naming both roles' own outcomes.
+- `cuttlefish show <task_id>` on a team renders every role's events,
+  distinguishable by their own `role` field.
+- No `--role` at all, or a duplicate role name, both exit
+  `EXIT_CONFIG_ERROR` before any workflow starts.
+
+#### Integration
+
+- A real `run_team` execution (a deliberately-missing kopicode binary, the
+  same no-mock discipline `test_delegate.py`/`test_workflow.py` already
+  hold) journals every event under the failing role's own `role`, and a
+  collected `satay.TaskFailedError` unwraps to the same reason string a
+  direct `DelegationError` would have produced outside a team.
+- Each role gets its own `HandoverWritten` once its own window crosses
+  budget, independent of the other role's.
+
+#### Unit
+
+- `maybe_handover(..., role=...)` filters strictly to that role's own
+  events (including `None`, the plain single-task case); one role's
+  handover never suppresses another's.
+- `_parse_roles` splits `NAME:TASK_TEXT` on the first `:`, rejects a
+  missing `:`, an empty name/text, and a duplicate name.
+
+**Steering half: unblocked, not yet built.** satay `0.2.0`
+(`satay.control.run_app`, satay-runtime PR #101/#102, ADR-0046 there) closed
+the concrete gap that blocked this — `cuttlefish run` had no way to expose
+satay's own control API to anything outside the process (Q42). What's still
+ahead, once cuttlefish's own dependency is bumped and verified live: a
+`SteeringMessage` event type, `cuttlefish run --steerable` starting a
+`satay.control.run_app` block instead of a bare `satay.run_app` one and
+printing the base URL/token an operator needs, a `cuttlefish steer
+<task-id> "<message>"` HTTP client command, and the workflow-shape work
+(racing a short `wait_for_event` against normal delegation progress) inside
+`run_task`/`run_team` alike.
+
+### Slices D-F: not yet fully planned
 
 Named and real, sketched in `docs/PLAN.md`'s Open risks and
-`docs/QUESTIONS.md` Q28-Q37, but none has its own build plan yet.
+`docs/QUESTIONS.md` Q28-Q44, but none has its own build plan yet.
 
-- **Slice C - multi-agent handover and steerable chat**: generalizing V1's
-  per-task handover (ADR-0004) across a team, plus external steering built
-  on satay's `wait_for_event`/`send_event` (ADR-0001's 2026-09-20 addendum,
-  satay-runtime#98/#99).
 - **Slice D - the dashboard**: a game-like pixel-art virtual office per
   project, plus a zoomed-out portfolio view across many projects.
 - **Slice E - runners and hosting**: a registered-runner abstraction (an
