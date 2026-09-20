@@ -1,211 +1,87 @@
-# CLAUDE.md - agent brief for cuttlefish-agent
+# CLAUDE.md — agent brief for cuttlefish-agent (becoming cuttlefish-crew)
 
-cuttlefish is a long-running, unattended task assistant, built on
-[satay-runtime](https://github.com/leejianrong/satay-runtime) for durability and
-delegating coding subtasks to [kopicode](https://github.com/leejianrong/kopicode)
-over its existing headless interface. Python, `uv`, `ruff`, `mypy --strict`,
-`pytest` - the same toolchain conventions as satay-runtime, since this project
-depends on it directly.
+cuttlefish-crew is pivoting from a single-task supervisor into a fleet
+manager for teams of coding sub-agents across many software projects,
+dashboard-observable, with automated context handover and a hosting story
+for viewing a real demo remotely. Built on
+[satay-runtime](https://github.com/leejianrong/satay-runtime) for durable
+workflow execution, delegating coding work through a pluggable
+`AgentBackend` seam —
+[kopicode](https://github.com/leejianrong/kopicode) is the reference
+backend, headless Claude Code the second. Python, `uv`, `ruff`,
+`mypy --strict`, `pytest` — the same toolchain conventions as satay-runtime,
+since this project depends on it directly.
 
-## Build status
+## Trust the code over the docs
 
-**Trust the code over the docs.** `docs/` describes the intended system; where
-the two disagree, the code is the truth - `ls src/cuttlefish/`, `git log
---oneline`, and a module's own doc comment all beat a paragraph here. Read
-[`docs/PLAN.md`](docs/PLAN.md) first for the problem and shape, then
-[`docs/adr/`](docs/adr/) for why each load-bearing decision was made, then
-[`docs/SLICES.md`](docs/SLICES.md) for the build order this was built against.
-`docs/QUESTIONS.md` is the full decision register.
+`docs/` describes the intended system; where the two disagree, the code is
+the truth — `ls src/cuttlefish/`, `git log --oneline`, and a module's own
+doc comment all beat a paragraph here.
 
-**Slice 1 is complete, including the live end-to-end demonstration**: all 8
-build-plan steps in `docs/SLICES.md` V1 have landed and merged, each behind
-its own PR - `make ci` is green on `main` (lint, `mypy --strict`, the full
-unit/integration/e2e suite). KAN-1008 - a real file edit landing through the
-policy gate, with a live model credential - ran against the real
-OpenRouter-backed kopicode binary and closed on 2026-08-26; it also surfaced
-and fixed a real classification bug (`classify_stream` only recognised
-`edit_applied`, missing the `write_file`/`delete_file` tool calls that never
-emit it), so what R1/R2/R6 claim is now proven against the real binary, not
-just asserted from unmocked-but-credential-less tests.
+- [`docs/PLAN.md`](docs/PLAN.md) — the current problem, scope, and shape
+  (the cuttlefish-crew pivot direction, built on top of V1/V2's original MVP)
+- [`docs/adr/`](docs/adr/) — why each load-bearing decision was made, 0001–0005
+- [`docs/SLICES.md`](docs/SLICES.md) — the build order this was built against
+- [`docs/QUESTIONS.md`](docs/QUESTIONS.md) — every decision, who made it, and
+  where it landed, including gaps a live run surfaced after the fact
+- Pandan board `cuttlefish-agent` (key `CUT`) — build-plan progress as
+  epics/stories
 
-**Slice 2 (V2) is complete too**, all 3 backlog stories (KAN-1009/1010/1011)
-closed on 2026-08-26. It started before its own ADR-0002 trigger condition
-fired - see that ADR's 2026-08-26 addenda and `docs/QUESTIONS.md` Q26 for why,
-recorded rather than left implicit. `cuttlefish.sandbox` ended up with two
-backends, not the one V2 was originally scoped for: `E2bSandboxProvider`
-(built, unit-tested, but never exercised against a real account - no
-`E2B_API_KEY` has been available in this build's environment) and
-`ContainerSandboxProvider`, added because kopicode's own ADR-0011 decision 4
-permits "process or **container** containment," not only a microVM (ADR-0002's
-second 2026-08-26 addendum, Q27). The delegation is routed through whichever
-backend is configured (`CUTTLEFISH_SANDBOX=container|e2b|none`, opt-in;
-`none` keeps V1's original direct-host behaviour unchanged) - verified with a
-real edit landing through a real container sandbox and a real credential, the
-same live discipline KAN-1008 held V1 to. Two real gaps only showed up running
-that live, not from reasoning about the design up front: a container doesn't
-inherit the host's environment (kopicode's own credential has to be forwarded
-explicitly), and a bare base image ships no CA bundle, so an outbound HTTPS
-call fails TLS verification unless one is provided - both fixed in
-`cuttlefish.sandbox.container`/`cuttlefish.tasks.delegate`, not left as a
-known gap. Progress is tracked on the `cuttlefish-agent` Pandan board (epics
-`V1` and `V2`), both fully `done`.
+## What's built
 
-**A pivot is underway as of 2026-09-20**: the project is becoming
-**cuttlefish-crew**, a fleet manager running teams of coding sub-agents
-across many projects at once, not a single supervised task. `docs/PLAN.md`
-now describes this direction, `docs/QUESTIONS.md` Q28 onward and
-[`docs/adr/0005-agent-backend-becomes-a-pluggable-protocol.md`](docs/adr/0005-agent-backend-becomes-a-pluggable-protocol.md)
-carry the new decisions, and addenda on ADR-0001/ADR-0002 record what
-changed for satay's steering primitive and the multi-tenant trigger,
-respectively.
+V1, V2 (a durable, sandboxed kopicode delegation), and slice A (the
+pluggable `AgentBackend` seam — `KopicodeBackend` and `ClaudeCodeBackend`,
+selected via `CUTTLEFISH_AGENT_BACKEND`) are complete and merged; `make ci`
+is green on `main`. Start reading the code at `cuttlefish/workflow.py` (the
+core loop) and `cuttlefish/agents/` (the backend seam) — each module's own
+doc comment explains why it exists, not a list here. Live-verification
+history and real bugs a live run found and fixed are in each PR's own
+description and `docs/QUESTIONS.md`, not repeated here.
 
-**Slice A (the pluggable agent backend + rename) is complete**, landed the
-same day it was scoped. The coding-agent delegation runs through a new
-`cuttlefish.agents.AgentBackend` seam instead of a kopicode-hardcoded call
-site: `KopicodeBackend` moved V1/V2's exact delegation mechanics behind it
-with no behaviour change, and a new `ClaudeCodeBackend` wraps headless
-Claude Code (`claude -p ... --output-format stream-json`) as the second,
-proving implementation. Both were verified live against their real binaries
-- kopicode's own live proof predates this slice; Claude Code's own live run
-(a real file landing, and a real no-declared-allowlist task correctly unable
-to reach a shell at all) surfaced and fixed a real bug the same way KAN-1008
-did for kopicode: Claude Code's `Write`/`Edit` tool_use blocks report an
-*absolute* `file_path`, unlike kopicode's relative `edit_applied.path` -
-`cuttlefish.delegate.claude_code.classify_stream` now relativizes against
-`root` so `DelegationOutcome.edited_paths` reads the same regardless of
-which backend produced it (`docs/QUESTIONS.md` Q35). Selected via
-`CUTTLEFISH_AGENT_BACKEND=kopicode|claude-code` (default `kopicode`),
-mirroring `CUTTLEFISH_SANDBOX`'s existing pattern.
+## Known, accepted gaps — don't re-litigate
 
-Two gaps are named, not hidden, the same discipline this project already
-holds itself to: **policy parity is real but partial** - no declared
-allowlist maps to `--disallowedTools Bash` (a real, verified fail-closed
-result, the shell tool is absent from the model's toolset entirely), but a
-declared allowlist maps to `--allowedTools Bash(<cmd>:*)` patterns whose
-matching semantics are Claude Code's own, unverified against every command
-shape kopicode's grammar accepts (`docs/QUESTIONS.md` Q36). And **a
-sandboxed `ClaudeCodeBackend` delegation only works for an operator
-authenticated by an `ANTHROPIC_API_KEY`**, not Claude Code's own OAuth login
-- this build's own `claude` binary authenticates via OAuth with no API key
-set at all, so a sandboxed delegation under that auth mode fails closed,
-named and accepted for this slice rather than solved (`docs/QUESTIONS.md`
-Q37).
-
-The module list and everything else below still describes the V1/V2 code
-largely as it existed before this slice, now living behind the pluggable
-seam - read it as the foundation slice A built on, not as a separate,
-older system.
-
-What each module is, in one or two lines - read its own doc comment for why,
-not this list:
-
-- **`cuttlefish.episodic`** - the tagged-union event log,
-  `.cuttlefish/episodic.db` (SQLite), never a table inside satay's own
-  `.satay/`. A redactor strips known secret values at append time; an
-  unrecognised event type round-trips verbatim instead of being dropped.
-  ADR-0004.
-- **`cuttlefish.workflow`** - `run_task`, the `@satay.workflow` core loop:
-  one task per LLM call, one for the agent-backend delegation. ADR-0001,
-  ADR-0005.
-- **`cuttlefish.agents`** - the pluggable `AgentBackend` seam (ADR-0005):
-  `KopicodeBackend` (the reference implementation) and `ClaudeCodeBackend`
-  (the second, proving it), each owning its own policy/sandbox mechanics
-  honestly rather than pretending to a uniform guarantee neither backend
-  can actually make. `cuttlefish.tasks.delegate.delegate_to_agent_backend`
-  resolves which one runs from `runtime.Runtime.agent_backend`.
-- **`cuttlefish.delegate`** - each backend's own native CLI mechanics:
-  `kopicode.py` shells out to `kopicode run --print`, parses its NDJSON
-  stream (ADR-0003); `claude_code.py` shells out to `claude -p ...
-  --output-format stream-json` (ADR-0005). Both normalise to one
-  `DelegationOutcome` (`cuttlefish.agents.outcome`). See also the "one
-  external dependency" section below, for kopicode's own policy gate.
-- **`cuttlefish.sandbox`** - the `SandboxProvider` seam (create/exec/snapshot/
-  destroy), `ContainerSandboxProvider` (a local Docker daemon, no account
-  needed) and `E2bSandboxProvider` (built, never yet run against a live
-  account). `cuttlefish.tasks.delegate` routes the kopicode delegation through
-  whichever one is configured, opt-in. ADR-0002, `docs/QUESTIONS.md` Q12/Q27.
-- **`cuttlefish.handover`** - the working-memory handover: a token-budget
-  check, one bounded LLM call over the recent episodic window, written back
-  as an episodic event. ADR-0004, `docs/QUESTIONS.md` Q15.
-- **`cuttlefish.llm`** - the `LlmProvider` seam: `OpenRouterLlmProvider` (the
-  default) over OpenRouter's OpenAI-compatible endpoint, `ClaudeLlmProvider`
-  for a direct Anthropic credential, a keyless `ReplayLlmProvider` for tests.
-  `docs/QUESTIONS.md` Q11.
-- **`cuttlefish.cli`** - `cuttlefish run "<task>"` / `cuttlefish show
-  <task-id>`. `docs/QUESTIONS.md` Q9.
-
-Toolchain: Python 3.12/3.13, `uv`, `ruff`, `mypy --strict`, `pytest` split
-into unit/integration/e2e. `make ci` runs the full local-only suite; CI adds
-a job that builds kopicode from source so the delegation's integration tests
-run against the real binary, not a mock.
-
-## The one external dependency, and what landed with it
-
-Slice 1's kopicode delegation needed a policy gate that didn't exist in
-kopicode's codebase - only its ADR did
-([kopicode ADR-0011](https://github.com/leejianrong/kopicode/blob/main/docs/adr/0011-unattended-invocation-policy-gate.md)).
-It was filed as **kopicode board card KAN-987**, and it shipped on 2026-08-23
-(kopicode PR #109, `internal/permission.AllowlistPolicy` plus a `--policy-file`
-flag on `run --print`), before this repository's own scaffold existed. Step 8
-of [`docs/SLICES.md`](docs/SLICES.md) V1 is no longer gated on an open external
-card.
-
-It shipped with a condition worth knowing before touching the delegation task:
-kopicode ADR-0011 decision 4 requires orchestrator-side process/container
-containment for *any* policy-gated invocation, and names cuttlefish's own
-sandbox as the obligated party, with no carve-out for a single trusted
-operator. cuttlefish's own [ADR-0002](docs/adr/0002-sandbox-stays-internal-slice-1-accepts-the-risk.md)
-defers the sandbox to V2. Slice 1 proceeds anyway, on the same trust-model
-reasoning ADR-0002 already states, and records that exception explicitly in
-ADR-0002's consequences rather than leaving the tension unwritten - see that
-ADR and [`docs/QUESTIONS.md`](docs/QUESTIONS.md) Q25.
+- `ClaudeCodeBackend`'s sandboxed path only works for an operator
+  authenticated via `ANTHROPIC_API_KEY`, not Claude Code's own OAuth login.
+  `docs/QUESTIONS.md` Q37.
+- Its declared-allowlist-to-`--allowedTools` mapping is an honest
+  approximation, not full parity with kopicode's KAN-987 policy gate.
+  `docs/QUESTIONS.md` Q36.
+- satay-runtime is one process, one writer — no two cuttlefish tasks run
+  concurrently yet. satay-runtime's own roadmap now follows cuttlefish-crew's
+  needs rather than being a fixed dependency; a concrete need gets filed as
+  an issue there, not worked around here. `docs/QUESTIONS.md` Q33.
 
 ## Workflow conventions
 
-- `main` is PR-only now that there's something worth protecting - the initial
-  scaffold was the one thing allowed to land directly. Never push straight to
-  `main` after that.
-- Branch per slice part: `git switch -c feat/<slice>-<part>` off `origin/main`,
-  then open a PR. `make ci` green before merging.
+- `main` is PR-only. Branch per slice part: `git switch -c feat/<slice>-<part>`
+  off `origin/main`, then open a PR. `make ci` green before merging.
 - Commit trailer: `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>`.
+- `make check` (lint + `mypy --strict`), `make test` (fast, unit-only),
+  `make ci` (the full suite `make test-all` gates on). CI additionally
+  builds kopicode from source so the delegation's integration tests run
+  against the real binary, not a mock.
 
 ## Boundaries that must not be crossed
 
 These follow directly from the ADRs. Hold them without re-litigating them here.
 
-- **The core loop is a satay workflow from the first commit that runs a task, not
-  an ordinary function made durable later.** ADR-0001.
-- **Episodic memory is its own SQLite store, never a table inside satay's own
-  `.satay/` database.** ADR-0004.
-- **No parallel transcript.** Everything a person or another tool reads back is
-  derived from the episodic journal, the same discipline kopicode's own journal
-  holds and for the same reason - see ADR-0004's context section for what
-  happens when a hand-rolled transcript drifts from reality.
-- **The sandbox stays an internal package, not a second product**, until there's
-  a real second consumer or a concrete, proven reason to spin it out. ADR-0002.
+- **The core loop is a satay workflow from the first commit that runs a
+  task**, not an ordinary function made durable later. ADR-0001.
+- **Episodic memory is its own SQLite store**, never a table inside satay's
+  own `.satay/` database. ADR-0004.
+- **No parallel transcript.** Everything a person or another tool reads back
+  is derived from the episodic journal. ADR-0004.
+- **The sandbox stays an internal package, not a second product**, until a
+  real second consumer or concrete reason to spin it out exists. ADR-0002.
 - **No new protocol for any given backend.** Each `AgentBackend` wraps its
-  own tool's existing headless surface as it exists (kopicode's
-  `run --print`, ADR-0003; Claude Code's `-p --output-format stream-json`,
-  ADR-0005) - cuttlefish-crew normalises on its own side
-  (`DelegationOutcome`), it doesn't invent a shared wire format between
-  backends either.
+  own tool's existing headless surface as it exists; cuttlefish-crew
+  normalises on its own side (`DelegationOutcome`), never inventing a shared
+  wire format between backends. ADR-0003, ADR-0005.
 - **Secrets are redacted from the episodic journal at write time**, not read
-  time - by the time a value is readable, it's already committable.
+  time.
 
 ## Secrets
 
 - **Never read or open `.env`.** It holds the real `OPENROUTER_API_KEY` for
-  this repo. Refer to `.env.example` instead when you need to know what
-  variables are expected - it's the committed template with no real values.
-
-## Pointers
-
-- [`docs/PLAN.md`](docs/PLAN.md) - problem, scope, requirements, shape
-- [`docs/adr/`](docs/adr/) - decisions of record, 0001-0005
-- [`docs/SLICES.md`](docs/SLICES.md) - the build order and acceptance criteria
-- [`docs/QUESTIONS.md`](docs/QUESTIONS.md) - every decision, who made it, and
-  where it landed
-- [`README.md`](README.md) - what this is, for a human reading the repo cold
-- Pandan board `cuttlefish-agent` (board key `CUT`) - build-plan progress as
-  epics/stories; `KAN-1001` through `KAN-1008` are slice 1 (V1), `KAN-1009`
-  through `KAN-1011` are slice 2 (V2) - both epics fully `done`
+  this repo. Refer to `.env.example` instead — the committed template with
+  no real values.
