@@ -11,6 +11,7 @@ backend's own module (``cuttlefish.agents.kopicode``,
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import ClassVar, Protocol
 
 from cuttlefish.agents.outcome import DelegationOutcome
@@ -25,9 +26,19 @@ class AgentBackend(Protocol):
     episodic journal records which backend actually ran a delegation
     (``DelegationStarted.backend``), and that has to come from somewhere
     stable, not a Python class name a refactor could quietly change.
+
+    ``CREDENTIAL_ENV_VARS`` (ADR-0006) names the environment variables this
+    backend always tries to resolve for a delegation, whether or not the
+    operator declared them via ``cuttlefish run --secret`` — the same two
+    names (``OPENROUTER_API_KEY``/``ANTHROPIC_API_KEY`` for kopicode,
+    ``ANTHROPIC_API_KEY`` alone for Claude Code) each backend has always
+    forwarded ambiently. A caller resolves these plus any explicitly declared
+    names from :class:`~cuttlefish.secrets.store.SecretsStore` and passes the
+    result as ``secrets``.
     """
 
     NAME: ClassVar[str]
+    CREDENTIAL_ENV_VARS: ClassVar[tuple[str, ...]]
 
     async def delegate(
         self,
@@ -35,5 +46,6 @@ class AgentBackend(Protocol):
         task_text: str,
         root: str,
         allow: list[list[str]] | None,
+        secrets: Mapping[str, str],
         sandbox_provider: SandboxProvider | None,
     ) -> DelegationOutcome: ...

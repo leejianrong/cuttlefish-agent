@@ -77,6 +77,14 @@ class DelegationStarted:
     # default so a V1/V2 event written before the backend became pluggable still
     # decodes to the only backend that existed then, not an empty/unknown value.
     backend: str = "kopicode"
+    # Which secrets scope this delegation could read from (ADR-0006) — "default"
+    # so an event written before slice B decodes to the one scope every task
+    # implicitly ran under then, not an empty/unknown value.
+    project: str = "default"
+    # The secret *names* declared for this task (`cuttlefish run --secret NAME`),
+    # never their values — a resolved value never crosses a satay task boundary,
+    # let alone gets journaled here (ADR-0006).
+    secret_names: list[str] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

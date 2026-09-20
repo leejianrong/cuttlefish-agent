@@ -1,11 +1,12 @@
 # cuttlefish-crew: Plan
 
-Status: agreed and delivered - slice A (pluggable agent backend + rename),
-the first slice of the cuttlefish-crew direction, is complete and merged
-(PR #21). Supersedes the single-task-MVP framing this document held through
-V1/V2 (both complete, both merged to `main` - see `CLAUDE.md`'s "What's
-built" for that history, which stays true and is not being redone, only
-built on). Next up per `docs/SLICES.md`: slice B, secrets management.
+Status: agreed and delivered - slice A (pluggable agent backend + rename,
+PR #21) and slice B (project/agent-scoped secrets management, ADR-0006) are
+both complete and merged. Supersedes the single-task-MVP framing this
+document held through V1/V2 (both complete, both merged to `main` - see
+`CLAUDE.md`'s "What's built" for that history, which stays true and is not
+being redone, only built on). Next up per `docs/SLICES.md`: slice C,
+multi-agent handover and steerable chat.
 
 ## Problem
 
@@ -111,16 +112,28 @@ the operator actually babysits today.
   exists" - now extended to "no new protocol *between* backends either," but
   the single-protocol assumption itself is superseded), recorded rather than
   left silently stale.
+- **Slice B, project/agent-scoped secrets management (ADR-0006, Q34):** an
+  encrypted-at-rest secrets store (`cuttlefish.secrets.SecretsStore`,
+  `.cuttlefish/secrets.db`), scoped per project with an explicit shared
+  scope (`SHARED_SCOPE`) for a value like a personal OpenRouter key. Both
+  `KopicodeBackend`/`ClaudeCodeBackend`'s own `_credential_envs` now resolve
+  a name from the store before falling back to `os.environ`, and forward it
+  into a sandbox (`SandboxSpec.envs`) or a direct-host subprocess (a new
+  `env` parameter on `run_kopicode`/`run_claude_code`) alike - the seam
+  named in Q34 as "the thing to replace, not bypass" now goes through the
+  store first, ambient environment second, rather than only ever reading
+  `os.environ`. An operator declares which named secrets a task may read via
+  `cuttlefish run --project NAME --secret NAME` (repeatable), the same shape
+  `--allow` already established; a declared name absent from both scopes is
+  a config-time error (Q17's fail-closed posture), not a silent no-op. The
+  episodic journal's redactor is seeded with the same resolved names so a
+  secret that leaks back into a tool result still gets caught, and no
+  decrypted value ever crosses a satay task boundary (ADR-0006's own
+  "no satay-journaled plaintext" section). No credential-broker/proxy - that
+  remains explicitly deferred (Q34), unattempted this slice.
 
 **Out.**
 
-- Project/agent-scoped secrets management (slice B, new since this
-  milestone was first scoped - see Q34): an encrypted-at-rest secrets store,
-  scoped per project (and optionally shared across projects), injected into
-  a sandbox/backend at creation time through the same declared-policy
-  mechanism already gating command/path access. Not built this milestone -
-  slice A's own second-backend testing still gets its one real credential
-  via today's ad hoc env-var handling, same as V1/V2 always have.
 - Automated context handover redesigned for a multi-agent team (slice C, was
   B). V1's existing per-task handover (ADR-0004) keeps working unmodified;
   making it work sensibly across three agents sharing or diverging on
@@ -148,6 +161,14 @@ the operator actually babysits today.
   abstraction doesn't need new satay capability; where a later slice will,
   it's filed as a satay-runtime issue for that project's own roadmap, not
   built inside this repo.
+- A credential-broker/proxy (the agent never holds a raw secret at all, only
+  a scoped local proxy does) - explicitly deferred by Q34's own reasoning,
+  real future work once slice B's simpler direct-injection version's gaps
+  are concretely felt, not attempted this slice (ADR-0006).
+- A formal `Project` entity. Slice B's `--project NAME` is a plain string
+  scope, defaulting to `--root`'s own directory name - real, but provisional
+  (docs/QUESTIONS.md Q38); a first-class `Project` with its own identity is
+  slice D's (the dashboard's) job, not this one's.
 
 ## Requirements
 
@@ -160,6 +181,9 @@ the operator actually babysits today.
 | R4 | The repo/product's external surface (README, CLI help text/branding, docs cross-links) reads as cuttlefish-crew; the Python package import path (`cuttlefish`) is unchanged. | Must-have |
 | R5 | ADR-0002 and ADR-0003 have superseding or amending ADRs recorded reflecting the pluggable-backend and product-ambition decisions. | Must-have |
 | R6 | Existing sandbox routing (`CUTTLEFISH_SANDBOX=container\|e2b\|none`) and the declared per-task policy mechanism work per-backend, not only for kopicode. | Must-have |
+| R7 | A project/agent-scoped secrets store is encrypted at rest, scoped per project with an explicit shared scope, and an operator never configuring it gets today's exact V1/V2/slice-A behaviour unchanged. | Must-have (slice B) |
+| R8 | A declared secret is injected into both a sandboxed and a direct-host delegation, for both backends, through the same `_credential_envs` seam each backend already had - not a bolted-on second channel. | Must-have (slice B) |
+| R9 | A store-resolved secret value never becomes a satay-journaled task argument or return value, and the episodic journal's own redactor still catches it if it leaks back into a tool result. | Must-have (slice B) |
 
 ## Shape
 
@@ -171,6 +195,8 @@ the operator actually babysits today.
 | S4 | Backend-agnostic episodic event types for a delegation outcome, versioned per ADR-0004's forward-compatible unmarshalling | ADR-0004 |
 | S5 | External rebrand: repo name, README, CLI branding/help text, docs cross-links -> cuttlefish-crew; package import path (`cuttlefish`) unchanged | - |
 | S6 | An addendum to ADR-0002 (the multi-tenant trigger it named has fired) and a superseding ADR-0005 for ADR-0003 (multi-backend delegation) | ADR-0002 addendum, ADR-0005 |
+| S7 | `cuttlefish.secrets.SecretsStore` - an encrypted-at-rest, project-scoped key/value store (`.cuttlefish/secrets.db`), plus `cuttlefish secrets set/get/list/delete/generate-key` and `cuttlefish run --project/--secret` | ADR-0006 |
+| S8 | Each `AgentBackend`'s own `_credential_envs`/`CREDENTIAL_ENV_VARS` resolve a name from the store before `os.environ`; `run_kopicode`/`run_claude_code` gain an `env` parameter so a direct-host delegation gets the same injection a sandboxed one already had | ADR-0006 |
 
 ## Affordances
 
@@ -180,6 +206,9 @@ the operator actually babysits today.
 |------------|------|----------|
 | `CUTTLEFISH_AGENT_BACKEND=kopicode\|claude-code` | Config | Selects which `AgentBackend` implementation the delegation task routes through, the same pattern `CUTTLEFISH_SANDBOX` already established |
 | `cuttlefish run "<task>"` / `cuttlefish show <task-id>` | CLI commands | Unchanged in shape this milestone - the dashboard is slice C, not this one |
+| `CUTTLEFISH_SECRETS_KEY` | Config | Opt-in, mirroring `CUTTLEFISH_SANDBOX`'s posture - unset means no `SecretsStore` at all, every credential still resolved from `os.environ` |
+| `cuttlefish run --project NAME --secret NAME` | CLI flags | Declares this task's secrets scope and which named secrets (beyond a backend's own ambient credential names) it may read (ADR-0006) |
+| `cuttlefish secrets generate-key\|set\|get\|list\|delete` | CLI commands | Manages the store directly - the only way to actually populate it |
 
 ## Implementation decisions
 
@@ -226,6 +255,7 @@ E2B.
 |----|---------|---------------|
 | Q29 | The second backend proving pluggability is headless Claude Code, not a third tool. | Small - the interface doesn't care which second implementation proves it; swapping which tool goes second is additive. |
 | Q30 | The Python package import path stays `cuttlefish` while the repo/product/CLI branding become cuttlefish-crew externally. | Small now; if this project is ever published as an installable library under its own name, an import-path/product-name mismatch could confuse a new contributor - accepted for now, revisit if that happens. |
+| Q38 | A project's secrets scope is a plain string (`--project NAME`, defaulting to `--root`'s directory name) rather than waiting for a formal `Project` entity. | Small - a real `Project` entity (slice D) can be introduced later without changing the store's own schema (`scope` is already just a string); the cost is only that two different root paths for "the same" project must currently be named consistently by the operator, not inferred. |
 
 ## Open risks
 
@@ -239,22 +269,21 @@ E2B.
   multi-worker milestone ADR-0025 already earmarks). None of these block
   this milestone; slice B needs #98/#99, and "many projects concurrently"
   eventually needs #100.
-- **This milestone is the first of a much larger pivot** that isn't fully
-  written down yet. Slice B (project/agent-scoped secrets management - an
-  encrypted-at-rest store, policy-driven injection at sandbox-creation time,
-  no credential broker/proxy yet), slice C (multi-agent handover + steerable
-  chat), slice D (a dashboard, sketched as a game-like pixel-art virtual
-  office with a zoomed-out portfolio view for scale), slice E (the
-  runner/hosting abstraction unifying "tunnel to an always-on machine" and
-  "cuttlefish-crew provisions a hosted deployment itself"), and a deferred,
-  explicitly-last slice F (agent-initiated meetings, TTS + avatar,
-  facilitated through existing video-call infrastructure rather than built
-  from scratch) are all real, discussed, and intended - just not yet in
-  `docs/SLICES.md`. Treat this document as the current vision anchor until
-  that catches up, not as evidence the roadmap ends at slice A. Slice B was
-  inserted after this milestone was first scoped, once it became clear that
-  multiple projects each needing distinct, isolated credentials is a slice-A
-  -adjacent pain, not a slice-E-hosting-only one (Q34).
+- **This pivot is bigger than slices A and B alone.** Slice C (multi-agent
+  handover + steerable chat), slice D (a dashboard, sketched as a
+  game-like pixel-art virtual office with a zoomed-out portfolio view for
+  scale), slice E (the runner/hosting abstraction unifying "tunnel to an
+  always-on machine" and "cuttlefish-crew provisions a hosted deployment
+  itself"), and a deferred, explicitly-last slice F (agent-initiated
+  meetings, TTS + avatar, facilitated through existing video-call
+  infrastructure rather than built from scratch) are all real, discussed,
+  and intended - slice B (ADR-0006) is now done: an encrypted-at-rest
+  secrets store, scoped per project with a shared fallback, injected
+  through each backend's own `_credential_envs` seam, no credential
+  broker/proxy yet. Slice B was inserted after slice A was first scoped,
+  once it became clear that multiple projects each needing distinct,
+  isolated credentials is a slice-A-adjacent pain, not a slice-E-hosting-only
+  one (Q34).
 - **The product-ambition decision fires one of ADR-0002's two named
   triggers, not the one about spinning the sandbox out as its own
   product.** ADR-0002 named two independent triggers: whether the sandbox

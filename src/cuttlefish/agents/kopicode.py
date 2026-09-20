@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import ClassVar
 
@@ -30,14 +31,32 @@ _SANDBOX_POLICY_FILE = "/tmp/cuttlefish-policy.toml"  # inside the sandbox, not 
 _CREDENTIAL_ENV_VARS = ("OPENROUTER_API_KEY", "ANTHROPIC_API_KEY")
 
 
-def _credential_envs() -> dict[str, str]:
-    return {name: value for name in _CREDENTIAL_ENV_VARS if (value := os.environ.get(name))}
+def _credential_envs(secrets: Mapping[str, str]) -> dict[str, str]:
+    """Every env var this delegation should carry a credential value for.
+
+    ADR-0006: a name in `secrets` (already resolved from
+    :class:`~cuttlefish.secrets.store.SecretsStore`, project scope then shared)
+    wins over `os.environ` for the same name -- a project can override the
+    ambient credential, not just add to it. A `_CREDENTIAL_ENV_VARS` name absent
+    from `secrets` falls back to `os.environ`, exactly today's V1/V2 behaviour
+    when no secrets store is configured at all. Any other name in `secrets` (an
+    operator-declared secret with no ambient env-var counterpart, e.g. a
+    HuggingFace token) is forwarded as-is.
+    """
+    resolved = {
+        name: value
+        for name in _CREDENTIAL_ENV_VARS
+        if (value := secrets.get(name) or os.environ.get(name))
+    }
+    resolved.update({name: value for name, value in secrets.items() if name not in resolved})
+    return resolved
 
 
 class KopicodeBackend:
     """Wraps ``kopicode run --print`` behind the pluggable backend seam."""
 
     NAME: ClassVar[str] = "kopicode"
+    CREDENTIAL_ENV_VARS: ClassVar[tuple[str, ...]] = _CREDENTIAL_ENV_VARS
 
     def __init__(self, binary: str = "kopicode") -> None:
         self._binary = binary
@@ -48,6 +67,7 @@ class KopicodeBackend:
         task_text: str,
         root: str,
         allow: list[list[str]] | None,
+        secrets: Mapping[str, str],
         sandbox_provider: SandboxProvider | None,
     ) -> DelegationOutcome:
         fd, policy_path_str = tempfile.mkstemp(prefix="cuttlefish-policy-", suffix=".toml")
@@ -61,9 +81,14 @@ class KopicodeBackend:
                     task_text=task_text,
                     root=root,
                     policy_file=str(policy_path),
+                    env=_credential_envs(secrets),
                 )
             return await self._delegate_inside_sandbox(
-                sandbox_provider, task_text=task_text, root=root, policy_path=policy_path
+                sandbox_provider,
+                task_text=task_text,
+                root=root,
+                policy_path=policy_path,
+                secrets=secrets,
             )
         finally:
             policy_path.unlink(missing_ok=True)
@@ -75,6 +100,7 @@ class KopicodeBackend:
         task_text: str,
         root: str,
         policy_path: Path,
+        secrets: Mapping[str, str],
     ) -> DelegationOutcome:
         resolved_binary = shutil.which(self._binary)
         if resolved_binary is None:
@@ -82,7 +108,7 @@ class KopicodeBackend:
 
         handle = await provider.create(
             SandboxSpec(
-                envs=_credential_envs(),
+                envs=_credential_envs(secrets),
                 mounts={
                     resolved_binary: _SANDBOX_KOPICODE_BINARY,
                     root: root,

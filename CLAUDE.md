@@ -20,7 +20,7 @@ doc comment all beat a paragraph here.
 
 - [`docs/PLAN.md`](docs/PLAN.md) — the current problem, scope, and shape
   (the cuttlefish-crew pivot direction, built on top of V1/V2's original MVP)
-- [`docs/adr/`](docs/adr/) — why each load-bearing decision was made, 0001–0005
+- [`docs/adr/`](docs/adr/) — why each load-bearing decision was made, 0001–0006
 - [`docs/SLICES.md`](docs/SLICES.md) — the build order this was built against
 - [`docs/QUESTIONS.md`](docs/QUESTIONS.md) — every decision, who made it, and
   where it landed, including gaps a live run surfaced after the fact
@@ -29,14 +29,17 @@ doc comment all beat a paragraph here.
 
 ## What's built
 
-V1, V2 (a durable, sandboxed kopicode delegation), and slice A (the
-pluggable `AgentBackend` seam — `KopicodeBackend` and `ClaudeCodeBackend`,
-selected via `CUTTLEFISH_AGENT_BACKEND`) are complete and merged; `make ci`
-is green on `main`. Start reading the code at `cuttlefish/workflow.py` (the
-core loop) and `cuttlefish/agents/` (the backend seam) — each module's own
-doc comment explains why it exists, not a list here. Live-verification
-history and real bugs a live run found and fixed are in each PR's own
-description and `docs/QUESTIONS.md`, not repeated here.
+V1, V2 (a durable, sandboxed kopicode delegation), slice A (the pluggable
+`AgentBackend` seam — `KopicodeBackend` and `ClaudeCodeBackend`, selected via
+`CUTTLEFISH_AGENT_BACKEND`), and slice B (`cuttlefish.secrets.SecretsStore` —
+an encrypted-at-rest, project-scoped secrets store injected through each
+backend's own `_credential_envs`) are complete and merged; `make ci` is
+green on `main`. Start reading the code at `cuttlefish/workflow.py` (the
+core loop), `cuttlefish/agents/` (the backend seam), and
+`cuttlefish/secrets/` (the secrets store) — each module's own doc comment
+explains why it exists, not a list here. Live-verification history and real
+bugs a live run found and fixed are in each PR's own description and
+`docs/QUESTIONS.md`, not repeated here.
 
 ## Known, accepted gaps — don't re-litigate
 
@@ -50,6 +53,12 @@ description and `docs/QUESTIONS.md`, not repeated here.
   concurrently yet. satay-runtime's own roadmap now follows cuttlefish-crew's
   needs rather than being a fixed dependency; a concrete need gets filed as
   an issue there, not worked around here. `docs/QUESTIONS.md` Q33.
+- Secrets are injected directly, never brokered — the agent process itself
+  still holds every secret it's given in the clear, inside its own sandbox
+  or subprocess. A credential-broker/proxy is real future work, deliberately
+  deferred. `docs/QUESTIONS.md` Q34, ADR-0006.
+- A project's secrets scope is a plain string (`--project NAME`), not a
+  formal `Project` entity — that's slice D's job. `docs/QUESTIONS.md` Q38.
 
 ## Workflow conventions
 
@@ -79,9 +88,18 @@ These follow directly from the ADRs. Hold them without re-litigating them here.
   wire format between backends. ADR-0003, ADR-0005.
 - **Secrets are redacted from the episodic journal at write time**, not read
   time.
+- **A project-scoped secret's decrypted value never becomes a satay task
+  argument or return value.** `cuttlefish.secrets.SecretsStore.resolve` is
+  only ever called *inside* the already-side-effecting delegation task; the
+  result is a local variable handed straight to `backend.delegate()`, never
+  returned or passed to another task. ADR-0006.
 
 ## Secrets
 
 - **Never read or open `.env`.** It holds the real `OPENROUTER_API_KEY` for
   this repo. Refer to `.env.example` instead — the committed template with
   no real values.
+- **Never read or open `.cuttlefish/secrets.db`.** It's encrypted at rest,
+  but still holds every project's real secrets; use `cuttlefish secrets
+  get/list` instead. Never log or print `CUTTLEFISH_SECRETS_KEY` itself —
+  losing it is equivalent to losing every secret it protects.

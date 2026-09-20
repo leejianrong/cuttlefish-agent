@@ -30,6 +30,7 @@ async def test_the_temporary_policy_file_is_cleaned_up_after_the_call(tmp_path: 
             task_text="add a .gitignore entry",
             root=str(tmp_path),
             allow=None,
+            secrets={},
             sandbox_provider=None,
         )
 
@@ -54,7 +55,11 @@ async def test_a_declared_allowlist_reaches_the_written_policy_file(
     declared = [["go", "test"], ["npm", "test"]]
     with pytest.raises(DelegationError):
         await backend.delegate(
-            task_text="run the tests", root=str(tmp_path), allow=declared, sandbox_provider=None
+            task_text="run the tests",
+            root=str(tmp_path),
+            allow=declared,
+            secrets={},
+            sandbox_provider=None,
         )
 
     assert captured["allow"] == declared

@@ -39,13 +39,17 @@ classifiers = [
 # exported into the shell by hand. e2b backs E2bSandboxProvider (ADR-0002: the
 # only sandbox backend this project builds), floated for the same reason as
 # anthropic/openai — a well-behaved, actively maintained SDK cuttlefish doesn't
-# own and has no reason to pin as tightly as satay.
+# own and has no reason to pin as tightly as satay. cryptography backs
+# SecretsStore's Fernet encryption (ADR-0006) — floated for the same reason,
+# a well-audited, actively maintained SDK this project has no standing to pin
+# tightly, since it owns no cryptographic primitives of its own.
 dependencies = [
     "satay==0.1.0",
     "anthropic>=0.40",
     "openai>=3.3.1",
     "python-dotenv>=1.2.3",
     "e2b>=2.0",
+    "cryptography>=42",
 ]
 
 [project.scripts]
