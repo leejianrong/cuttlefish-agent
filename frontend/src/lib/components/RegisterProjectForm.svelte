@@ -7,6 +7,7 @@
   let name = $state("");
   let root = $state("");
   let rolesText = $state("builder: ships fast, terse commits\nreviewer: skeptical, flags risk");
+  let allowText = $state("");
   let submitting = $state(false);
   let error = $state<string | null>(null);
 
@@ -22,14 +23,31 @@
       .filter((role) => role.name.length > 0);
   }
 
+  function parseAllow(text: string): string[][] {
+    // One shell command per line, split on whitespace -- unlike the CLI's own
+    // `--allow`, this doesn't shell-quote a multi-word argument (e.g. a commit
+    // message), a deliberate simplification for this form (ADR-0009's Q53).
+    return text
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => line.split(/\s+/));
+  }
+
   async function submit(event: SubmitEvent) {
     event.preventDefault();
     submitting = true;
     error = null;
     try {
-      await client.registerProject({ name, root, roles: parseRoles(rolesText) });
+      await client.registerProject({
+        name,
+        root,
+        roles: parseRoles(rolesText),
+        allow: parseAllow(allowText),
+      });
       name = "";
       root = "";
+      allowText = "";
       open = false;
       onRegistered();
     } catch {
@@ -57,6 +75,11 @@
     <label>
       Roles (one per line, <code>name: persona</code>, persona optional)
       <textarea bind:value={rolesText} rows="3"></textarea>
+    </label>
+    <label>
+      Allowed shell commands (one per line, e.g. <code>uv run pytest</code>; none allowed
+      by default)
+      <textarea bind:value={allowText} rows="2"></textarea>
     </label>
     {#if error}
       <p class="error">{error}</p>

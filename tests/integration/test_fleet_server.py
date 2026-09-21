@@ -62,6 +62,42 @@ def test_register_then_list_round_trips(client: TestClient, tmp_path: Path) -> N
     assert [p["id"] for p in listing["projects"]] == [body["id"]]
 
 
+def test_register_with_allow_round_trips(client: TestClient, tmp_path: Path) -> None:
+    response = client.post(
+        "/api/projects",
+        json={
+            "name": "demo",
+            "root": str(tmp_path / "demo"),
+            "allow": [["uv", "run", "pytest"]],
+        },
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["allow"] == [["uv", "run", "pytest"]]
+
+    fetched = client.get(f"/api/projects/{body['id']}").json()
+    assert fetched["allow"] == [["uv", "run", "pytest"]]
+
+
+def test_update_allow_replaces_the_whole_set(client: TestClient, tmp_path: Path) -> None:
+    created = client.post(
+        "/api/projects",
+        json={"name": "demo", "root": str(tmp_path / "demo"), "allow": [["go", "test"]]},
+    )
+    project_id = created.json()["id"]
+
+    response = client.patch(
+        f"/api/projects/{project_id}/allow", json={"allow": [["uv", "run", "pytest"]]}
+    )
+    assert response.status_code == 200
+    assert response.json()["allow"] == [["uv", "run", "pytest"]]
+
+
+def test_update_allow_for_an_unknown_project_is_404(client: TestClient) -> None:
+    response = client.patch("/api/projects/no-such-id/allow", json={"allow": []})
+    assert response.status_code == 404
+
+
 def test_register_requires_name_and_root(client: TestClient) -> None:
     response = client.post("/api/projects", json={"name": "demo"})
     assert response.status_code == 400

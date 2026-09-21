@@ -16,6 +16,7 @@ export interface ProjectSummary {
   secrets_scope: string;
   roles: RoleDefinition[];
   last_team_id: string | null;
+  allow: string[][];
   running: boolean;
   status: Record<string, RoleStatus>;
 }
@@ -99,6 +100,7 @@ export class FleetClient {
     root: string;
     secrets_scope?: string;
     roles: RoleDefinition[];
+    allow?: string[][];
   }): Promise<ProjectSummary> {
     return this.request("/api/projects", { method: "POST", body: JSON.stringify(input) });
   }
@@ -107,6 +109,13 @@ export class FleetClient {
     return this.request(`/api/projects/${id}/roles`, {
       method: "PATCH",
       body: JSON.stringify({ roles }),
+    });
+  }
+
+  updateAllow(id: string, allow: string[][]): Promise<ProjectSummary> {
+    return this.request(`/api/projects/${id}/allow`, {
+      method: "PATCH",
+      body: JSON.stringify({ allow }),
     });
   }
 

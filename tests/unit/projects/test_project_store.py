@@ -17,6 +17,49 @@ def test_register_defaults_secrets_scope_to_name(tmp_path: Path) -> None:
     assert project.secrets_scope == "demo"
     assert project.roles == ()
     assert project.last_team_id is None
+    assert project.allow == ()
+    store.close()
+
+
+def test_register_get_round_trips_allow(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    allow = (("uv", "run", "pytest"), ("go", "test"))
+    project = store.register(name="demo", root=str(tmp_path / "demo"), allow=allow)
+    assert store.get(project.id).allow == allow
+    store.close()
+
+
+def test_update_allow_replaces_the_whole_set(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    project = store.register(name="demo", root=str(tmp_path / "demo"), allow=(("go", "test"),))
+    updated = store.update_allow(project.id, (("uv", "run", "pytest"),))
+    assert updated.allow == (("uv", "run", "pytest"),)
+    store.close()
+
+
+def test_a_projects_db_predating_the_allow_column_is_migrated_in_place(tmp_path: Path) -> None:
+    """`allow_json` was added after slice D1 shipped -- an operator's existing,
+    on-disk `projects.db` predates it (D1D2 live-usage findings). Simulate that by
+    creating the pre-migration schema directly, then opening it through
+    `ProjectStore.open` as a real operator restart would."""
+    import sqlite3
+
+    db_path = tmp_path / "projects.db"
+    legacy = sqlite3.connect(db_path)
+    legacy.execute(
+        "CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, root TEXT NOT NULL, "
+        "secrets_scope TEXT NOT NULL, roles_json TEXT NOT NULL, last_team_id TEXT)"
+    )
+    legacy.execute(
+        "INSERT INTO projects (id, name, root, secrets_scope, roles_json, last_team_id) "
+        "VALUES ('p1', 'demo', '/tmp/demo', 'demo', '[]', NULL)"
+    )
+    legacy.commit()
+    legacy.close()
+
+    store = ProjectStore.open(db_path)
+    project = store.get("p1")
+    assert project.allow == ()
     store.close()
 
 

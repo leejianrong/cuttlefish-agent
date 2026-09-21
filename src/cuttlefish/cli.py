@@ -338,6 +338,7 @@ def _project_dict(project: Project) -> dict[str, Any]:
         "secrets_scope": project.secrets_scope,
         "roles": [{"name": r.name, "persona": r.persona} for r in project.roles],
         "last_team_id": project.last_team_id,
+        "allow": [list(command) for command in project.allow],
     }
 
 
@@ -350,11 +351,13 @@ def _projects(args: argparse.Namespace) -> int:
             except ConfigError as exc:
                 print(f"cuttlefish: {exc}", file=sys.stderr)
                 return EXIT_CONFIG_ERROR
+            allow = tuple(tuple(command) for command in _parse_allow(args.allow))
             project = store.register(
                 name=args.name,
                 root=str(Path(args.root).resolve()),
                 secrets_scope=args.secrets_scope,
                 roles=tuple(roles),
+                allow=allow,
             )
             print(json.dumps(_project_dict(project)))
             return EXIT_OK
@@ -548,6 +551,17 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "One role: a name, optionally followed by ':' and a persistent "
             "persona/voice (Q31). Repeatable."
+        ),
+    )
+    add_parser.add_argument(
+        "--allow",
+        action="append",
+        metavar="CMD",
+        help=(
+            "One shell command every role in this project's team may run "
+            "inside --root, shell-quoted (e.g. --allow 'go test'). Repeatable. "
+            "Applies to every daemon-started team (`cuttlefish serve`), which has "
+            "no CLI --allow flag of its own (Q53). Default: no shell command allowed."
         ),
     )
 

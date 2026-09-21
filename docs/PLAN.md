@@ -17,7 +17,13 @@ data - and **D2**, the pixel-art skin on top of D1's already-proven API
 animated pixel-art sprite (`frontend/src/lib/pixel/`) whose pose/tint
 reflects its live status, no new rendering dependency (Q51); `cuttlefish
 serve` auto-picks a free port (Q52); `make demo`/`scripts/demo.sh` is the
-one-command way to run a daemon and the dashboard together locally.
+one-command way to run a daemon and the dashboard together locally. A real
+2-role dashboard run against a real repo then surfaced two gaps (Q53, Q54),
+both now fixed: a persisted, per-project `allow` field so a daemon-started
+team can actually run the shell commands its own project declares, and a
+sequential-dispatch fallback for kopicode-backed teams so a 2+-role team
+sharing one `root` no longer collides on kopicode's own per-working-tree
+lock (`docs/SLICES.md`'s "D1 live-usage fixes").
 
 ## Problem
 
@@ -156,7 +162,9 @@ the operator actually babysits today.
   real concurrency, not a declared-but-serial fan-out - and, separately,
   that two roles sharing one kopicode-backed `--root` collide on kopicode's
   own per-working-tree session lock, a real, named, accepted gap (Q44), not
-  a bug this project fixed or worked around.
+  a bug this project fixed or worked around at the time (a sequential-dispatch
+  fallback closed it later, once live use showed it was the common case, not
+  an edge one - Q54, `docs/SLICES.md`'s "D1 live-usage fixes").
 - **The satay-runtime dependency slice C's steering half needed (Q42):**
   satay had no way to expose its own control API to anything outside a
   `cuttlefish run` process without pulling in `satay dev`'s whole
@@ -258,6 +266,8 @@ the operator actually babysits today.
 | R15 | A plain (non-game) UI renders every registered project's live role status and lets an operator steer a role's work, wired to the same API the eventual pixel-art view (D2) will render against. | Must-have (slice D1) |
 | R16 | Each role renders as an animated sprite whose pose/tint reflects its live status, at both the zoomed-out (portfolio) and zoomed-in (project detail) scale, with no new rendering dependency. | Delivered (slice D2) |
 | R17 | An operator can bring up a fleet daemon and the dashboard together with one command, on a machine that may already have something else bound to the daemon's default port. | Delivered (slice D2) |
+| R18 | A daemon-started (dashboard) team can run the same declared shell commands a CLI-started one can, via a persisted per-project setting rather than a per-run flag it has no way to supply. | Delivered (D1 live-usage fixes, Q53) |
+| R19 | A 2+-role kopicode-backed team sharing one project's `root` completes instead of failing closed on kopicode's own per-working-tree lock. | Delivered, interim fix (D1 live-usage fixes, Q54) |
 
 ## Shape
 
@@ -354,7 +364,7 @@ E2B.
 | Q29 | The second backend proving pluggability is headless Claude Code, not a third tool. | Small - the interface doesn't care which second implementation proves it; swapping which tool goes second is additive. |
 | Q30 | The Python package import path stays `cuttlefish` while the repo/product/CLI branding become cuttlefish-crew externally. | Small now; if this project is ever published as an installable library under its own name, an import-path/product-name mismatch could confuse a new contributor - accepted for now, revisit if that happens. |
 | Q38 | A project's secrets scope was a plain string (`--project NAME`, defaulting to `--root`'s directory name); a formal `Project` entity now exists (slice D1, Q47). | Resolved - `Project.secrets_scope` defaults to `Project.name`, so the store's own `scope` column needed no migration, exactly as this row originally predicted. |
-| Q44 | A team's roles all share one `--root`, so kopicode's own per-working-tree session lock means only one role's kopicode invocation can actually edit at a time in practice - real concurrent *editing* needs separate checkouts, not attempted this slice. | Moderate - the concurrency mechanism itself is real and verified (Q43); an operator who declares two kopicode-backed roles against one shared root today gets one succeeding and the other refused by kopicode's own lock, a real, visible failure rather than silent corruption, but not yet a smooth multi-checkout experience. Unaffected by slice D1: the fleet daemon still points every role at the project's one `root`. |
+| Q44 | A team's roles all share one `--root`, so kopicode's own per-working-tree session lock means only one role's kopicode invocation can actually edit at a time in practice - real concurrent *editing* needs separate checkouts, not attempted this slice. | Resolved to "sequential fallback, not separate checkouts yet" (Q54) - a 2+-role kopicode-backed team no longer fails closed on the lock; it dispatches one-at-a-time instead. Real concurrent editing still needs separate checkouts per role, deliberately deferred until this fallback's own cost is felt. |
 | Q47 | The `ProjectStore` registry path (`~/.cuttlefish/projects.db`) is hardcoded this slice, no env override. | Small - a `CUTTLEFISH_PROJECTS_HOME`-style override is additive if a concrete need (e.g. multiple isolated registries on one machine) shows up; not built ahead of one. |
 
 ## Open risks

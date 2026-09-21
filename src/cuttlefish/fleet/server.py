@@ -46,6 +46,7 @@ def _project_json(daemon: FleetDaemon, project_id: str) -> dict[str, Any]:
         "secrets_scope": project.secrets_scope,
         "roles": [{"name": r.name, "persona": r.persona} for r in project.roles],
         "last_team_id": project.last_team_id,
+        "allow": [list(command) for command in project.allow],
         "running": daemon.is_running(project.id),
         "status": daemon.status(project.id),
     }
@@ -64,6 +65,10 @@ def _roles_from_body(body: dict[str, Any]) -> tuple[RoleDefinition, ...]:
     return tuple(
         RoleDefinition(name=r["name"], persona=r.get("persona", "")) for r in body.get("roles", [])
     )
+
+
+def _allow_from_body(body: dict[str, Any]) -> tuple[tuple[str, ...], ...]:
+    return tuple(tuple(command) for command in body.get("allow", []))
 
 
 def create_app(daemon: FleetDaemon, *, security: satay.control.SecurityPolicy) -> FastAPI:
@@ -115,6 +120,7 @@ def create_app(daemon: FleetDaemon, *, security: satay.control.SecurityPolicy) -
             root=root,
             secrets_scope=body.get("secrets_scope"),
             roles=_roles_from_body(body),
+            allow=_allow_from_body(body),
         )
         return _project_json(daemon, project.id)
 
@@ -138,6 +144,15 @@ def create_app(daemon: FleetDaemon, *, security: satay.control.SecurityPolicy) -
         body = await request.json()
         try:
             daemon.projects.update_roles(project_id, _roles_from_body(body))
+            return _project_json(daemon, project_id)
+        except ProjectNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.patch("/api/projects/{project_id}/allow")
+    async def update_allow(project_id: str, request: Request) -> dict[str, Any]:
+        body = await request.json()
+        try:
+            daemon.projects.update_allow(project_id, _allow_from_body(body))
             return _project_json(daemon, project_id)
         except ProjectNotFoundError as exc:
             raise HTTPException(404, str(exc)) from exc

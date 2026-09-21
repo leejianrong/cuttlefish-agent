@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from cuttlefish.fleet.daemon import FleetDaemon, FleetError, RunningTeam
-from cuttlefish.projects.store import ProjectStore
+from cuttlefish.fleet.daemon import FleetDaemon, FleetError, RunningTeam, _build_role_inputs
+from cuttlefish.projects.store import ProjectStore, RoleDefinition
 
 
 def _daemon(tmp_path: Path) -> FleetDaemon:
@@ -31,6 +31,31 @@ async def _inject_running(daemon: FleetDaemon, project_id: str) -> asyncio.Task[
         team_id="fake-team", base_url="http://127.0.0.1:0", token="fake-token", task=task
     )
     return task
+
+
+def test_build_role_inputs_threads_the_projects_declared_allow_to_every_role(
+    tmp_path: Path,
+) -> None:
+    """The bug this closes: `FleetDaemon.start` used to build `RoleInput`s with no
+    `allow` key at all, so `run_team` fell back to `DEFAULT_SHELL_ALLOWLIST`
+    (no shell command allowed) for every daemon-started team, regardless of what
+    the project itself declared (D1D2 live-usage findings)."""
+    daemon = FleetDaemon(ProjectStore.open(tmp_path / "projects.db"))
+    project = daemon.projects.register(
+        name="alpha",
+        root=str(tmp_path / "alpha"),
+        roles=(RoleDefinition(name="builder", persona="ships fast"),),
+        allow=(("uv", "run", "pytest"), ("go", "test")),
+    )
+
+    role_inputs = _build_role_inputs(
+        project, [{"name": "builder", "text": "add a test"}, {"name": "reviewer", "text": "look"}]
+    )
+
+    assert role_inputs[0]["text"] == "You are builder. ships fast\n\nadd a test"
+    assert role_inputs[1]["text"] == "look"  # no registered persona -- runs as-is
+    for role_input in role_inputs:
+        assert role_input["allow"] == [["uv", "run", "pytest"], ["go", "test"]]
 
 
 async def test_starting_an_already_running_project_raises_without_touching_it(

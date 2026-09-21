@@ -69,6 +69,18 @@ the one-command way to run a daemon and the dashboard together locally
 history and real bugs a live run found and fixed are in each PR's own
 description and `docs/QUESTIONS.md`, not repeated here.
 
+A real 2-role dashboard run against a real repo then surfaced two D1 gaps,
+both now fixed (`docs/SLICES.md`'s "D1 live-usage fixes", Q53/Q54):
+`Project.allow` is a persisted, per-project shell-command allowlist (same
+shape as `persona`) threaded into `FleetDaemon.start`'s `RoleInput`s, so a
+daemon-started team is no longer stuck with `DEFAULT_SHELL_ALLOWLIST`
+regardless of what the project declares; and `cuttlefish.team
+._dispatch_round` falls back to one-at-a-time dispatch, instead of
+`satay.gather`, whenever two or more active roles in a round are all
+kopicode-backed (every role in a team already shares one `root`), avoiding
+kopicode's own per-working-tree lock collision (Q44) rather than failing
+closed on it.
+
 Slice E (runner/hosting) is next per the roadmap, not yet started.
 
 ## Known, accepted gaps — don't re-litigate
@@ -96,12 +108,16 @@ Slice E (runner/hosting) is next per the roadmap, not yet started.
   (satay-runtime#100), which remains just as unneeded as it was for one
   project's own `satay.gather`-based team concurrency. `docs/QUESTIONS.md`
   Q33, Q42, Q48.
-- Two kopicode-backed team roles sharing one `--root` collide on kopicode's
-  own per-working-tree session lock — real concurrent *editing* needs
-  separate checkouts per role, not built yet. Not a bug; kopicode's lock is
-  correctly guarding against two agents editing one uncommitted working
-  tree at once. Unaffected by the fleet daemon (every role in one project's
-  team still shares that project's one `root`). `docs/QUESTIONS.md` Q44.
+- Two kopicode-backed team roles sharing one `--root` used to collide on
+  kopicode's own per-working-tree session lock; `cuttlefish.team
+  ._dispatch_round` now dispatches them one-at-a-time instead of via
+  `satay.gather` whenever that collision would otherwise happen (Q54) — real,
+  but not concurrent for that case. Real concurrent *editing* still needs
+  separate checkouts per role, deliberately deferred until this fallback's
+  own cost is felt (kopicode's lock itself is correctly guarding against two
+  agents editing one uncommitted working tree at once, not a bug). Unaffected
+  by the fleet daemon (every role in one project's team still shares that
+  project's one `root`). `docs/QUESTIONS.md` Q44, Q54.
 - Secrets are injected directly, never brokered — the agent process itself
   still holds every secret it's given in the clear, inside its own sandbox
   or subprocess. A credential-broker/proxy is real future work, deliberately

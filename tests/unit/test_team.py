@@ -2,6 +2,11 @@
 missing kopicode binary (the same no-mock discipline `test_delegate.py` and
 `test_workflow.py` already hold, DelegationError being the real, fast failure mode
 rather than something faked) -- ADR-0007.
+
+Every test below runs the default `agent_backend` ("kopicode") with two or more
+roles, so it already exercises `_dispatch_round`'s sequential-fallback branch
+(Q44) on every run, not just the branch below that tests it directly -- these
+assertions are agnostic to dispatch order, so they hold either way.
 """
 
 from __future__ import annotations
@@ -22,11 +27,22 @@ from cuttlefish.episodic.events import (
 from cuttlefish.episodic.store import EpisodicStore
 from cuttlefish.llm.provider import LlmResponse
 from cuttlefish.llm.replay import ReplayLlmProvider
-from cuttlefish.team import RoleInput, run_team
+from cuttlefish.team import RoleInput, _needs_sequential_dispatch, run_team
 
 
 def _roles(*names: str) -> list[RoleInput]:
     return [{"name": name, "text": f"do the {name} work"} for name in names]
+
+
+def test_needs_sequential_dispatch_only_for_two_or_more_kopicode_backed_roles() -> None:
+    """Q44: kopicode's own per-working-tree lock only collides once a *second*
+    role tries the *same* root concurrently -- every role in a team already
+    shares one root (`TeamInput.root` is singular), so this reduces to "kopicode,
+    and more than one role active this round." Any other backend, or a lone
+    active role, dispatches concurrently exactly as before."""
+    assert _needs_sequential_dispatch(["builder", "reviewer"], "kopicode") is True
+    assert _needs_sequential_dispatch(["builder"], "kopicode") is False
+    assert _needs_sequential_dispatch(["builder", "reviewer"], "claude-code") is False
 
 
 async def test_every_roles_own_delegation_failure_is_journaled_under_its_own_role(
