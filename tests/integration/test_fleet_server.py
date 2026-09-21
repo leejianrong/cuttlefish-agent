@@ -1,0 +1,151 @@
+"""Integration: the fleet daemon's HTTP surface (ADR-0009) -- a real FastAPI app
+over a real `FleetDaemon`/`ProjectStore`, exercised with Starlette's `TestClient`
+(in-process, no real socket). Token auth (`x-cuttlefish-token`) is real, reusing
+`satay.control.SecurityPolicy` directly rather than a stub.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+import satay.control
+from starlette.testclient import TestClient
+
+from cuttlefish.fleet.daemon import FleetDaemon
+from cuttlefish.fleet.server import TOKEN_HEADER, create_app
+from cuttlefish.projects.store import ProjectStore
+
+
+@pytest.fixture
+def client(tmp_path: Path) -> TestClient:
+    daemon = FleetDaemon(ProjectStore.open(tmp_path / "projects.db"))
+    security = satay.control.SecurityPolicy(token="test-token")
+    app = create_app(daemon, security=security)
+    return TestClient(app, base_url="http://127.0.0.1", headers={TOKEN_HEADER: "test-token"})
+
+
+def test_missing_token_is_rejected(tmp_path: Path) -> None:
+    daemon = FleetDaemon(ProjectStore.open(tmp_path / "projects.db"))
+    security = satay.control.SecurityPolicy(token="real-token")
+    app = create_app(daemon, security=security)
+    response = TestClient(app, base_url="http://127.0.0.1").get("/api/projects")
+    assert response.status_code == 401
+
+
+def test_wrong_token_is_rejected(tmp_path: Path) -> None:
+    daemon = FleetDaemon(ProjectStore.open(tmp_path / "projects.db"))
+    security = satay.control.SecurityPolicy(token="real-token")
+    app = create_app(daemon, security=security)
+    response = TestClient(app, base_url="http://127.0.0.1", headers={TOKEN_HEADER: "wrong"}).get(
+        "/api/projects"
+    )
+    assert response.status_code == 401
+
+
+def test_register_then_list_round_trips(client: TestClient, tmp_path: Path) -> None:
+    response = client.post(
+        "/api/projects",
+        json={
+            "name": "demo",
+            "root": str(tmp_path / "demo"),
+            "roles": [{"name": "builder", "persona": "ships fast"}],
+        },
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["name"] == "demo"
+    assert body["roles"] == [{"name": "builder", "persona": "ships fast"}]
+    assert body["running"] is False
+
+    listing = client.get("/api/projects").json()
+    assert [p["id"] for p in listing["projects"]] == [body["id"]]
+
+
+def test_register_requires_name_and_root(client: TestClient) -> None:
+    response = client.post("/api/projects", json={"name": "demo"})
+    assert response.status_code == 400
+
+
+def test_events_for_a_project_with_no_team_yet_is_empty(client: TestClient, tmp_path: Path) -> None:
+    created = client.post("/api/projects", json={"name": "demo", "root": str(tmp_path / "demo")})
+    project_id = created.json()["id"]
+
+    response = client.get(f"/api/projects/{project_id}/events")
+    assert response.status_code == 200
+    assert response.json() == {"events": []}
+
+
+def test_events_for_an_unknown_project_is_404(client: TestClient) -> None:
+    assert client.get("/api/projects/no-such-id/events").status_code == 404
+
+
+def test_a_browser_cors_preflight_from_a_loopback_origin_succeeds_without_a_token(
+    tmp_path: Path,
+) -> None:
+    """A real browser's preflight `OPTIONS` never carries `x-cuttlefish-token` at
+    all -- it must be answered by CORS middleware itself, not rejected by the same
+    token check a real request goes through (ADR-0009)."""
+    daemon = FleetDaemon(ProjectStore.open(tmp_path / "projects.db"))
+    app = create_app(daemon, security=satay.control.SecurityPolicy(token="real-token"))
+    client = TestClient(app, base_url="http://127.0.0.1")
+
+    response = client.options(
+        "/api/projects",
+        headers={
+            "Origin": "http://127.0.0.1:5173",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": TOKEN_HEADER,
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:5173"
+
+
+def test_a_cors_preflight_from_a_non_loopback_origin_is_rejected(tmp_path: Path) -> None:
+    daemon = FleetDaemon(ProjectStore.open(tmp_path / "projects.db"))
+    app = create_app(daemon, security=satay.control.SecurityPolicy(token="real-token"))
+    client = TestClient(app, base_url="http://127.0.0.1")
+
+    response = client.options(
+        "/api/projects",
+        headers={"Origin": "http://evil.example", "Access-Control-Request-Method": "POST"},
+    )
+    assert "access-control-allow-origin" not in response.headers
+
+
+def test_get_unknown_project_is_404(client: TestClient) -> None:
+    assert client.get("/api/projects/no-such-id").status_code == 404
+
+
+def test_deregister_then_get_is_404(client: TestClient, tmp_path: Path) -> None:
+    created = client.post("/api/projects", json={"name": "demo", "root": str(tmp_path / "demo")})
+    project_id = created.json()["id"]
+
+    assert client.delete(f"/api/projects/{project_id}").status_code == 204
+    assert client.get(f"/api/projects/{project_id}").status_code == 404
+
+
+def test_steer_a_project_with_no_running_team_is_409(client: TestClient, tmp_path: Path) -> None:
+    created = client.post("/api/projects", json={"name": "demo", "root": str(tmp_path / "demo")})
+    project_id = created.json()["id"]
+
+    response = client.post(
+        f"/api/projects/{project_id}/steer", json={"role": "builder", "text": "hi"}
+    )
+    assert response.status_code == 409
+
+
+def test_start_an_unregistered_project_is_404(client: TestClient) -> None:
+    response = client.post(
+        "/api/projects/no-such-id/start", json={"roles": [{"name": "builder", "text": "do it"}]}
+    )
+    assert response.status_code == 404
+
+
+def test_start_with_no_roles_is_400(client: TestClient, tmp_path: Path) -> None:
+    created = client.post("/api/projects", json={"name": "demo", "root": str(tmp_path / "demo")})
+    project_id = created.json()["id"]
+
+    response = client.post(f"/api/projects/{project_id}/start", json={"roles": []})
+    assert response.status_code == 400

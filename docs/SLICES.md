@@ -148,9 +148,10 @@ V1 and V2 proved one durable, sandboxed delegation to kopicode. V3 is the
 pivot: cuttlefish becomes cuttlefish-crew, a fleet manager running teams of
 coding sub-agents across many projects at once. See `docs/PLAN.md` for the
 full problem/solution and `docs/QUESTIONS.md` Q28 onward for the decisions
-behind it. Slices A, B, and C (both halves) are built; slices D-F are named
-and real but not yet planned in this file - each gets its own build plan
-once the slice before it ships and the interface it needs actually exists.
+behind it. Slices A, B, and C (both halves) are built; slice D1 (below) is
+designed and in progress; slices D2, E, and F are named and real but not yet
+planned in this file - each gets its own build plan once the slice before it
+ships and the interface it needs actually exists.
 
 ### Slice A: a pluggable agent backend, and the external rebrand
 
@@ -449,18 +450,118 @@ still-running delegation's work" as written — if an operator's real usage
 needs faster-than-round-boundary responsiveness, that's new information this
 slice's own design pass didn't have, not a bug in it.
 
-### Slices D-F: not yet fully planned
+### Slice D1: a `Project` entity and the fleet daemon (in progress)
+
+**Delivers:** `docs/PLAN.md`'s R13-R15.
+
+**Build plan**
+
+1. `cuttlefish.projects.ProjectStore` (ADR-0009): a new SQLite store at
+   `~/.cuttlefish/projects.db`, outside any single project's own
+   `.cuttlefish/` (that directory's own layout - `secrets.db`, `episodic.db`,
+   `.satay/` - is unchanged). `Project(id, name, root, secrets_scope,
+   roles: list[RoleDefinition])`; `RoleDefinition(name, persona)` stores a
+   role's durable voice/personality (Q31), never task text.
+   `register`/`list`/`get`/`update_roles`/`deregister` (deregister only
+   removes the registry row, never touches `root`).
+2. `cuttlefish.runtime`: `_runtime` becomes a
+   `contextvars.ContextVar[Runtime | None]` (Q49) - `configure` -> `.set`,
+   `current` -> `.get`. Behaviourally unchanged for a single `cuttlefish
+   run`/`run-team` process calling `configure()` once at startup.
+3. `cuttlefish.fleet.FleetDaemon` (ADR-0009): `start(project, roles)`
+   launches `asyncio.create_task` running `run_team` against
+   `satay.control.run_app(data_dir=<project.root>/.satay)`, `steerable=True`
+   unconditionally; registers the resulting `base_url`/`token`/`team_id` in
+   an in-memory `dict[project_id, RunningTeam]` and updates
+   `Project.last_team_id`. `stop(project)` calls satay's own already-built
+   `POST /runs/{team_id}/cancel`. `steer(project, role, text)` calls
+   `cuttlefish.steering.send_steering_message` directly (in-process, no
+   subprocess to shell out to). `status(project)` opens that project's own
+   `.cuttlefish/episodic.db` read-only and reduces each role's latest events
+   to one of `queued`/`working`/`blocked`/`done`/`failed`.
+4. A FastAPI app (no new dependency - `satay[studio]` already pulls in
+   FastAPI/uvicorn) exposing `GET/POST /api/projects`, `POST
+   /api/projects/{id}/start\|stop\|steer`, `GET /api/projects/{id}/status`.
+   Loopback-only bind, a generated bearer token printed at startup
+   (`x-cuttlefish-token`), the same posture satay's own control API holds.
+5. `cuttlefish projects add\|list\|remove` (CLI, registry management without
+   the daemon running) and `cuttlefish serve` (starts the daemon).
+6. `frontend/` (ADR-0009): `npm create vite@latest -- --template svelte-ts`,
+   a typed `fetch` API client against step 4's routes. A portfolio grid
+   (`GET /api/projects`) and a project detail view (role cards, a steer
+   textarea, an event tail) - plain UI, no pixel art (D2's job).
+   `make frontend-check`/`make frontend-build` join `make ci`.
+
+**Demo:** `cuttlefish projects add --root ~/code/some-project --role
+builder:"ships fast, terse commit messages" --role reviewer:"skeptical,
+flags risk before approving"`, then `cuttlefish serve` in one terminal,
+then open the dashboard in a browser: the portfolio grid shows the
+project; clicking "start" with a builder/reviewer task text launches both
+roles concurrently (visible as `working` status chips within seconds);
+opening the project detail view and sending a steer message to `builder`
+redirects its next round, identically to `cuttlefish steer` today, but
+from the browser.
+
+**Rests on assumptions:** Q47 (`~/.cuttlefish/projects.db`, no env
+override yet) and Q49/Q50 (an in-process `ContextVar`-scoped daemon rather
+than a subprocess-per-project one) - if either needs revisiting, the fix is
+additive (an env var; a subprocess fallback) rather than a rewrite, per
+each question's own "cost if wrong."
+
+### Test plan (D1)
+
+#### End-to-end
+
+- `cuttlefish projects add`/`list`/`remove` round-trip a project's identity
+  and role personas through `~/.cuttlefish/projects.db`.
+- `cuttlefish serve`, then starting two *different* registered projects'
+  teams concurrently, both reach `working` status and both complete -
+  verified live, not just declared, the same discipline Q43 already held
+  for one project's own team concurrency.
+- Steering a role through the daemon's `/steer` route redirects its next
+  round, identically to `cuttlefish steer`'s own already-verified behaviour
+  (ADR-0008).
+- Stopping a running team via `/stop` results in that team's satay run
+  reaching a cancelled/terminal state.
+
+#### Integration
+
+- `FleetDaemon.status` correctly derives `queued`/`working`/`blocked`/
+  `done`/`failed` from a table of episodic-event sequences, independent of
+  a live daemon.
+- Two concurrently-running `FleetDaemon`-launched teams write to two
+  *different* `.cuttlefish/episodic.db` files without cross-contamination -
+  the concrete regression the `ContextVar` fix (Q49) exists to prevent.
+- The FastAPI surface rejects a request missing `x-cuttlefish-token` or
+  bearing the wrong one.
+
+#### Unit
+
+- `ProjectStore` round-trips `register`/`get`/`update_roles`/`deregister`;
+  `deregister` never touches `root`'s own files.
+- `runtime.configure`/`current` behave identically to the pre-ADR-0009
+  global for one linear (non-concurrent) call sequence; two concurrent
+  `asyncio.create_task`s each calling `configure()` see only their own
+  `Runtime` from `current()`, never a sibling's.
+- A role name supplied to `start()` that isn't in the project's registered
+  `roles` runs with no persona prefix, not a rejected request.
+
+### Slices D2, E, F: not yet fully planned
 
 Named and real, sketched in `docs/PLAN.md`'s Open risks and
-`docs/QUESTIONS.md` Q28-Q44, but none has its own build plan yet.
+`docs/QUESTIONS.md` Q28-Q50, but none has its own build plan yet.
 
-- **Slice D - the dashboard**: a game-like pixel-art virtual office per
-  project, plus a zoomed-out portfolio view across many projects.
+- **Slice D2 - the pixel-art skin**: sub-agents as animated sprites whose
+  state (idle/working/blocked/reviewing) reflects D1's already-built status
+  API, replacing D1's plain status chips/cards - a rendering layer on an
+  already-proven API, not a new data model.
 - **Slice E - runners and hosting**: a registered-runner abstraction (an
   always-on operator machine, or a cuttlefish-crew-provisioned deployment)
   fronted by a stable URL, closing the "view a real demo without being at
   the machine" gap. Needs satay-runtime's Postgres/multi-worker milestone
-  (satay-runtime#100) to run many projects' workflows concurrently.
+  (satay-runtime#100) only if it ever needs to run more workflow *engines*
+  than one host process can hold - D1's own finding (Q48) means this isn't
+  needed purely for "many projects concurrently."
 - **Slice F - meetings, explicitly last**: agent-requested or on-demand
   meetings, TTS + an avatar presenting project status over existing
   video-call infrastructure cuttlefish-crew facilitates rather than builds.

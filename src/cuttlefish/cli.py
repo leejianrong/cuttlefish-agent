@@ -15,28 +15,23 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
 import shlex
-import shutil
 import sys
 import uuid
-from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import satay
 import satay.control
 from dotenv import load_dotenv
 
 from cuttlefish import runtime
-from cuttlefish.agents.backend import AgentBackend
-from cuttlefish.agents.registry import resolve_backend
-from cuttlefish.episodic.redact import DEFAULT_SECRET_ENV_VARS, Redactor
+from cuttlefish.config import ConfigError, prepare_run, secrets_db_path
 from cuttlefish.episodic.store import EpisodicStore
+from cuttlefish.fleet import DEFAULT_FLEET_PORT, FleetDaemon, run_daemon
 from cuttlefish.handover import DEFAULT_TOKEN_BUDGET
-from cuttlefish.llm.provider import LlmProvider
-from cuttlefish.sandbox.provider import SandboxProvider
+from cuttlefish.projects.store import Project, ProjectStore, RoleDefinition
 from cuttlefish.secrets.store import (
-    SECRETS_KEY_ENV,
     SHARED_SCOPE,
     InvalidSecretsKeyError,
     MissingSecretsKeyError,
@@ -65,48 +60,6 @@ EXIT_TASK_FAILED = 1
 EXIT_CONFIG_ERROR = 2
 EXIT_WORKFLOW_ERROR = 3
 
-KOPICODE_BIN_ENV = "CUTTLEFISH_KOPICODE_BIN"
-DEFAULT_KOPICODE_BIN = "kopicode"
-CLAUDE_CODE_BIN_ENV = "CUTTLEFISH_CLAUDE_CODE_BIN"
-DEFAULT_CLAUDE_CODE_BIN = "claude"
-AGENT_BACKEND_ENV = "CUTTLEFISH_AGENT_BACKEND"
-DEFAULT_AGENT_BACKEND = "kopicode"
-LLM_PROVIDER_ENV = "CUTTLEFISH_LLM_PROVIDER"
-DEFAULT_LLM_PROVIDER = "openrouter"
-SANDBOX_ENV = "CUTTLEFISH_SANDBOX"
-DEFAULT_SANDBOX = "none"
-
-
-class ConfigError(Exception):
-    """A startup configuration problem, checked before a task is accepted (Q17)."""
-
-
-def _resolve_kopicode_binary() -> str:
-    return os.environ.get(KOPICODE_BIN_ENV, DEFAULT_KOPICODE_BIN)
-
-
-def _resolve_claude_code_binary() -> str:
-    return os.environ.get(CLAUDE_CODE_BIN_ENV, DEFAULT_CLAUDE_CODE_BIN)
-
-
-def _resolve_agent_backend() -> str:
-    """Which :class:`~cuttlefish.agents.backend.AgentBackend` a delegation runs
-    through (ADR-0005, PLAN.md's Affordances) — "kopicode" by default, matching
-    V1/V2's only backend.
-    """
-    choice = os.environ.get(AGENT_BACKEND_ENV, DEFAULT_AGENT_BACKEND)
-    if choice not in ("kopicode", "claude-code"):
-        raise ConfigError(
-            f"unknown {AGENT_BACKEND_ENV}={choice!r}; expected 'kopicode' or 'claude-code'"
-        )
-    return choice
-
-
-def _check_binary_on_path(binary: str, *, env_hint: str) -> None:
-    """Fail closed, before a task is even accepted (Q17) — not discovered mid-task."""
-    if shutil.which(binary) is None:
-        raise ConfigError(f"{binary!r} is not on PATH. Install it, or set {env_hint} to its path.")
-
 
 def _parse_allow(values: list[str] | None) -> list[list[str]]:
     """Each ``--allow`` value is one allowed command, shell-quoted (e.g. ``"go
@@ -115,200 +68,6 @@ def _parse_allow(values: list[str] | None) -> list[list[str]]:
     original default: no shell command allowed.
     """
     return [shlex.split(value) for value in values] if values else []
-
-
-def _resolve_llm_provider() -> LlmProvider:
-    """cuttlefish's own reasoning provider (QUESTIONS.md Q11).
-
-    "replay" is a test/debug escape hatch, not a documented operator choice: it
-    answers every call with a fixed, uninformative response so `cuttlefish run`
-    can be smoke-tested with no live credential. A real run defaults to
-    "openrouter" — one key over an OpenAI-compatible endpoint reaches many
-    upstream models, rather than locking cuttlefish to a single vendor SDK.
-    "claude" remains available for a direct Anthropic credential.
-    """
-    choice = os.environ.get(LLM_PROVIDER_ENV, DEFAULT_LLM_PROVIDER)
-    if choice == "openrouter":
-        from cuttlefish.llm.openrouter import MissingApiKeyError, OpenRouterLlmProvider
-
-        try:
-            return OpenRouterLlmProvider()
-        except MissingApiKeyError as exc:
-            raise ConfigError(str(exc)) from exc
-    if choice == "claude":
-        from cuttlefish.llm.claude import ClaudeLlmProvider
-
-        return ClaudeLlmProvider()
-    if choice == "replay":
-        from cuttlefish.llm.provider import LlmResponse
-        from cuttlefish.llm.replay import ReplayLlmProvider
-
-        return ReplayLlmProvider(
-            [LlmResponse(model="replay", text="(no real summary — replay provider)")] * 1000
-        )
-    raise ConfigError(
-        f"unknown {LLM_PROVIDER_ENV}={choice!r}; expected 'openrouter', 'claude', or 'replay'"
-    )
-
-
-def _resolve_sandbox_provider() -> SandboxProvider | None:
-    """Real containment for the kopicode delegation (docs/SLICES.md V2 step 2,
-    KAN-1010) — opt-in, not the default. "none" (unset) keeps V1's original
-    behaviour: the delegation runs directly against ``--root``, the named
-    exception ADR-0002's addendum already accepts, not silently widened for
-    every operator just because a sandbox package now exists.
-    """
-    choice = os.environ.get(SANDBOX_ENV, DEFAULT_SANDBOX)
-    if choice == "none":
-        return None
-    if choice == "container":
-        from cuttlefish.sandbox.container import ContainerSandboxProvider, DockerNotAvailableError
-
-        try:
-            return ContainerSandboxProvider()
-        except DockerNotAvailableError as exc:
-            raise ConfigError(str(exc)) from exc
-    if choice == "e2b":
-        from cuttlefish.sandbox.e2b import E2bSandboxProvider, MissingApiKeyError
-
-        try:
-            return E2bSandboxProvider()
-        except MissingApiKeyError as exc:
-            raise ConfigError(str(exc)) from exc
-    raise ConfigError(f"unknown {SANDBOX_ENV}={choice!r}; expected 'none', 'container', or 'e2b'")
-
-
-def _secrets_db_path() -> Path:
-    return Path.cwd() / ".cuttlefish" / "secrets.db"
-
-
-def _resolve_secrets_store() -> SecretsStore | None:
-    """Project-scoped secrets (ADR-0006) — opt-in, mirroring
-    ``_resolve_sandbox_provider``'s "none by default" posture. An operator who
-    never sets ``CUTTLEFISH_SECRETS_KEY`` gets today's exact V1/V2 behaviour:
-    no store, every credential still resolved from ``os.environ`` by each
-    backend's own ``_credential_envs``.
-    """
-    if SECRETS_KEY_ENV not in os.environ:
-        return None
-    try:
-        return SecretsStore.open(_secrets_db_path())
-    except InvalidSecretsKeyError as exc:
-        raise ConfigError(str(exc)) from exc
-
-
-def _resolve_project_secrets(
-    *,
-    backend: AgentBackend,
-    secrets_store: SecretsStore | None,
-    project: str,
-    secret_names: list[str],
-) -> dict[str, str]:
-    """Every name this delegation should try to resolve from `secrets_store` --
-    `secret_names` (an operator's own `--secret` declarations) plus whatever
-    `backend` always tries ambiently (`AgentBackend.CREDENTIAL_ENV_VARS`,
-    ADR-0006) -- resolved eagerly here (not just inside the task) so a missing
-    *declared* name fails closed before a task is even accepted (Q17), and so
-    the same resolved values can seed the episodic journal's redactor below.
-    """
-    if secrets_store is None:
-        if secret_names:
-            raise ConfigError(f"--secret was given but {SECRETS_KEY_ENV} is not set")
-        return {}
-    names = sorted(set(secret_names) | set(backend.CREDENTIAL_ENV_VARS))
-    resolved = secrets_store.resolve(project, names)
-    missing = [name for name in secret_names if name not in resolved]
-    if missing:
-        raise ConfigError(
-            f"declared secret(s) not found for project {project!r} or the shared scope: "
-            + ", ".join(missing)
-        )
-    return resolved
-
-
-@dataclass(frozen=True, slots=True)
-class _PreparedRun:
-    """Every config seam `run` and `run-team` both resolve identically before
-    starting their own workflow — factored out once both needed it (ADR-0007)."""
-
-    kopicode_binary: str
-    claude_code_binary: str
-    agent_backend: str
-    llm_provider: LlmProvider
-    sandbox_provider: SandboxProvider | None
-    secrets_store: SecretsStore | None
-    episodic_store: EpisodicStore
-
-    def close(self) -> None:
-        self.episodic_store.close()
-        if self.secrets_store is not None:
-            self.secrets_store.close()
-
-    def as_runtime(self) -> runtime.Runtime:
-        return runtime.Runtime(
-            episodic_store=self.episodic_store,
-            llm_provider=self.llm_provider,
-            kopicode_binary=self.kopicode_binary,
-            claude_code_binary=self.claude_code_binary,
-            agent_backend=self.agent_backend,
-            sandbox_provider=self.sandbox_provider,
-            secrets_store=self.secrets_store,
-        )
-
-
-def _prepare_run(*, project: str, secret_names: list[str]) -> _PreparedRun:
-    """Resolve the backend, LLM provider, sandbox, secrets store, and a
-    secrets-aware redactor — or raise `ConfigError`, closing any secrets store
-    already opened first, so a caller only has to print the error and return
-    `EXIT_CONFIG_ERROR`, no further cleanup required.
-    """
-    kopicode_binary = _resolve_kopicode_binary()
-    claude_code_binary = _resolve_claude_code_binary()
-
-    secrets_store = None
-    try:
-        agent_backend = _resolve_agent_backend()
-        if agent_backend == "kopicode":
-            _check_binary_on_path(kopicode_binary, env_hint=KOPICODE_BIN_ENV)
-        else:
-            _check_binary_on_path(claude_code_binary, env_hint=CLAUDE_CODE_BIN_ENV)
-        backend = resolve_backend(
-            agent_backend, kopicode_binary=kopicode_binary, claude_code_binary=claude_code_binary
-        )
-        llm_provider = _resolve_llm_provider()
-        sandbox_provider = _resolve_sandbox_provider()
-        secrets_store = _resolve_secrets_store()
-        resolved_secrets = _resolve_project_secrets(
-            backend=backend,
-            secrets_store=secrets_store,
-            project=project,
-            secret_names=secret_names,
-        )
-    except ConfigError:
-        if secrets_store is not None:
-            secrets_store.close()
-        raise
-
-    # A store-resolved secret never touches os.environ (ADR-0006), so the
-    # redactor's own default (env-only) lookup would silently miss it -- fall
-    # back to os.environ only for a name resolved_secrets doesn't have.
-    def _redaction_lookup(name: str) -> str | None:
-        return resolved_secrets.get(name) or os.environ.get(name)
-
-    redaction_names = sorted(set(DEFAULT_SECRET_ENV_VARS) | set(backend.CREDENTIAL_ENV_VARS))
-    episodic_store = EpisodicStore.open(
-        Path.cwd() / ".cuttlefish" / "episodic.db",
-        redactor=Redactor(redaction_names, lookup=_redaction_lookup),
-    )
-    return _PreparedRun(
-        kopicode_binary=kopicode_binary,
-        claude_code_binary=claude_code_binary,
-        agent_backend=agent_backend,
-        llm_provider=llm_provider,
-        sandbox_provider=sandbox_provider,
-        secrets_store=secrets_store,
-        episodic_store=episodic_store,
-    )
 
 
 def _resolve_root_and_project(args: argparse.Namespace) -> tuple[str, str]:
@@ -322,7 +81,7 @@ async def _run(args: argparse.Namespace) -> int:
     secret_names = sorted(set(args.secret or []))
 
     try:
-        prepared = _prepare_run(project=project, secret_names=secret_names)
+        prepared = prepare_run(project=project, secret_names=secret_names)
     except ConfigError as exc:
         print(f"cuttlefish: {exc}", file=sys.stderr)
         return EXIT_CONFIG_ERROR
@@ -398,7 +157,7 @@ async def _run_team(args: argparse.Namespace) -> int:
 
     try:
         roles = _parse_roles(args.role)
-        prepared = _prepare_run(project=project, secret_names=secret_names)
+        prepared = prepare_run(project=project, secret_names=secret_names)
     except ConfigError as exc:
         print(f"cuttlefish: {exc}", file=sys.stderr)
         return EXIT_CONFIG_ERROR
@@ -497,7 +256,7 @@ def _steer(args: argparse.Namespace) -> int:
 
 def _open_secrets_store_or_exit() -> SecretsStore:
     try:
-        return SecretsStore.open(_secrets_db_path())
+        return SecretsStore.open(secrets_db_path(Path.cwd()))
     except (MissingSecretsKeyError, InvalidSecretsKeyError) as exc:
         print(f"cuttlefish: {exc}", file=sys.stderr)
         raise SystemExit(EXIT_CONFIG_ERROR) from exc
@@ -546,6 +305,81 @@ def _secrets(args: argparse.Namespace) -> int:
         return EXIT_OK
     finally:
         store.close()
+
+
+def _parse_role_definitions(values: list[str] | None) -> list[RoleDefinition]:
+    """Each ``--role`` value is ``NAME`` or ``NAME:PERSONA`` (ADR-0009) -- unlike
+    ``run-team``'s ``--role`` (`_parse_roles`), a persona is optional: a project
+    can register a role's name now and give it a voice later
+    (``cuttlefish projects update-roles``), or never -- an unregistered persona
+    just means a start request for that role runs with no persona prefix.
+    """
+    if not values:
+        return []
+    roles: list[RoleDefinition] = []
+    seen: set[str] = set()
+    for value in values:
+        name, _sep, persona = value.partition(":")
+        name, persona = name.strip(), persona.strip()
+        if not name:
+            raise ConfigError(f"--role {value!r} must be NAME or NAME:PERSONA")
+        if name in seen:
+            raise ConfigError(f"--role name {name!r} was declared more than once")
+        seen.add(name)
+        roles.append(RoleDefinition(name=name, persona=persona))
+    return roles
+
+
+def _project_dict(project: Project) -> dict[str, Any]:
+    return {
+        "id": project.id,
+        "name": project.name,
+        "root": project.root,
+        "secrets_scope": project.secrets_scope,
+        "roles": [{"name": r.name, "persona": r.persona} for r in project.roles],
+        "last_team_id": project.last_team_id,
+    }
+
+
+def _projects(args: argparse.Namespace) -> int:
+    store = ProjectStore.open()
+    try:
+        if args.projects_command == "add":
+            try:
+                roles = _parse_role_definitions(args.role)
+            except ConfigError as exc:
+                print(f"cuttlefish: {exc}", file=sys.stderr)
+                return EXIT_CONFIG_ERROR
+            project = store.register(
+                name=args.name,
+                root=str(Path(args.root).resolve()),
+                secrets_scope=args.secrets_scope,
+                roles=tuple(roles),
+            )
+            print(json.dumps(_project_dict(project)))
+            return EXIT_OK
+        if args.projects_command == "list":
+            for project in store.list():
+                print(json.dumps(_project_dict(project)))
+            return EXIT_OK
+        # args.projects_command == "remove"
+        if not store.deregister(args.project_id):
+            print(f"cuttlefish: no project {args.project_id!r} registered", file=sys.stderr)
+            return EXIT_TASK_FAILED
+        print(f"cuttlefish: deregistered {args.project_id!r} (its files were left untouched)")
+        return EXIT_OK
+    finally:
+        store.close()
+
+
+async def _serve(args: argparse.Namespace) -> int:
+    store = ProjectStore.open()
+    daemon = FleetDaemon(store)
+    try:
+        await run_daemon(daemon, host=args.host, port=args.port)
+    finally:
+        store.close()
+    return EXIT_OK
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -691,6 +525,45 @@ def build_parser() -> argparse.ArgumentParser:
     list_scope.add_argument("--project", help="The project scope")
     list_scope.add_argument("--shared", action="store_true", help="The shared scope")
 
+    projects_parser = subparsers.add_parser(
+        "projects", help="Manage the Project registry (ADR-0009)"
+    )
+    projects_sub = projects_parser.add_subparsers(dest="projects_command", required=True)
+
+    add_parser = projects_sub.add_parser("add", help="Register a project")
+    add_parser.add_argument("--name", required=True, help="Display name")
+    add_parser.add_argument(
+        "--root", required=True, help="The checkout every role delegates against"
+    )
+    add_parser.add_argument(
+        "--secrets-scope",
+        dest="secrets_scope",
+        default=None,
+        help="This project's SecretsStore scope (ADR-0006). Default: --name.",
+    )
+    add_parser.add_argument(
+        "--role",
+        action="append",
+        metavar="NAME[:PERSONA]",
+        help=(
+            "One role: a name, optionally followed by ':' and a persistent "
+            "persona/voice (Q31). Repeatable."
+        ),
+    )
+
+    projects_sub.add_parser("list", help="List every registered project")
+
+    remove_parser = projects_sub.add_parser(
+        "remove", help="Deregister a project (never touches its files)"
+    )
+    remove_parser.add_argument("project_id")
+
+    serve_parser = subparsers.add_parser(
+        "serve", help="Start the fleet daemon: launches and owns every registered project's team"
+    )
+    serve_parser.add_argument("--host", default="127.0.0.1", help="Loopback-only (ADR-0014)")
+    serve_parser.add_argument("--port", type=int, default=DEFAULT_FLEET_PORT)
+
     return parser
 
 
@@ -706,6 +579,10 @@ def main(argv: list[str] | None = None) -> int:
         return _secrets(args)
     if args.command == "steer":
         return _steer(args)
+    if args.command == "projects":
+        return _projects(args)
+    if args.command == "serve":
+        return asyncio.run(_serve(args))
     return _show(args)
 
 

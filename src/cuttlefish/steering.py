@@ -129,3 +129,27 @@ def send_steering_message(
         raise SteeringDeliveryError(f"{base_url} rejected the steering message: {exc}") from exc
     except urllib.error.URLError as exc:
         raise SteeringDeliveryError(f"couldn't reach {base_url}: {exc}") from exc
+
+
+def cancel_run(*, base_url: str, token: str, run_id: str) -> None:
+    """`POST {base_url}/runs/{run_id}/cancel` -- satay's own already-built
+    ``ControlAPI.cancel`` route (ADR-0046), reused directly by the fleet daemon
+    (ADR-0009) to stop a running team without a subprocess to signal. Cancellation
+    still can't interrupt a coding-agent invocation genuinely mid-flight (ADR-0008's
+    already-named gap) -- a cancel enqueued while a round is running takes effect at
+    that round's own natural end, identically to how a queued `SteeringMessage`
+    already does.
+    """
+    request = urllib.request.Request(
+        f"{base_url}/runs/{run_id}/cancel",
+        data=b"",
+        method="POST",
+        headers={"x-satay-token": token},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:  # localhost-only control API
+            response.read()
+    except urllib.error.HTTPError as exc:
+        raise SteeringDeliveryError(f"{base_url} rejected the cancel: {exc}") from exc
+    except urllib.error.URLError as exc:
+        raise SteeringDeliveryError(f"couldn't reach {base_url}: {exc}") from exc

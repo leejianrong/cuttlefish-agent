@@ -20,7 +20,7 @@ doc comment all beat a paragraph here.
 
 - [`docs/PLAN.md`](docs/PLAN.md) — the current problem, scope, and shape
   (the cuttlefish-crew pivot direction, built on top of V1/V2's original MVP)
-- [`docs/adr/`](docs/adr/) — why each load-bearing decision was made, 0001–0008
+- [`docs/adr/`](docs/adr/) — why each load-bearing decision was made, 0001–0009
 - [`docs/SLICES.md`](docs/SLICES.md) — the build order this was built against
 - [`docs/QUESTIONS.md`](docs/QUESTIONS.md) — every decision, who made it, and
   where it landed, including gaps a live run surfaced after the fact
@@ -33,23 +33,37 @@ V1, V2 (a durable, sandboxed kopicode delegation), slice A (the pluggable
 `AgentBackend` seam — `KopicodeBackend` and `ClaudeCodeBackend`, selected via
 `CUTTLEFISH_AGENT_BACKEND`), slice B (`cuttlefish.secrets.SecretsStore` —
 an encrypted-at-rest, project-scoped secrets store injected through each
-backend's own `_credential_envs`), and slice C in full — both the
+backend's own `_credential_envs`), slice C in full — both the
 team-concurrency half (`cuttlefish.team.run_team` — N named roles delegating
 concurrently via `satay.gather`, `cuttlefish run-team --role NAME:TASK_TEXT`)
 and the steering half (`cuttlefish run --steerable`/`run-team --steerable`
 open `satay.control.run_app` and print a `base_url`/token;
 `cuttlefish steer <task-id> "<message>" [--role NAME]` delivers a
 `SteeringMessage` that redirects a still-running task at the boundary
-between delegation rounds, not mid-flight, ADR-0008) — are complete and
-merged; `make ci` is green on `main`. Start reading the code at
-`cuttlefish/workflow.py` (the single-task core loop),
-`cuttlefish/team.py` (the multi-role loop), `cuttlefish/steering.py` (the
-steering wire contract and CLI-facing pointer file/HTTP client),
-`cuttlefish/agents/` (the backend seam), and `cuttlefish/secrets/` (the
-secrets store) — each module's own doc comment explains why it exists, not
-a list here. Live-verification history and real bugs a live run found and
-fixed are in each PR's own description and `docs/QUESTIONS.md`, not
-repeated here.
+between delegation rounds, not mid-flight, ADR-0008) — and slice D1
+(ADR-0009: a formal `Project` entity — `cuttlefish.projects.ProjectStore`,
+`~/.cuttlefish/projects.db` — plus the fleet daemon, `cuttlefish.fleet
+.FleetDaemon`/`cuttlefish serve`, which launches and owns every registered
+project's team concurrently as in-process `asyncio` tasks, no subprocess
+per project, each its own `satay.control.run_app` pointed at that project's
+own `<root>/.satay`; a loopback-only FastAPI surface
+(`cuttlefish.fleet.server`) a Svelte + TypeScript + Vite dashboard
+(`frontend/`) talks to for start/stop/steer/status) — are complete and
+merged; `make ci` is green on `main` (now gating the `frontend/` build too).
+Start reading the code at `cuttlefish/workflow.py` (the single-task core
+loop), `cuttlefish/team.py` (the multi-role loop), `cuttlefish/steering.py`
+(the steering wire contract and CLI-facing pointer file/HTTP client),
+`cuttlefish/agents/` (the backend seam), `cuttlefish/secrets/` (the secrets
+store), `cuttlefish/projects/` (the `Project` registry), and
+`cuttlefish/fleet/` (the daemon and its HTTP surface) — each module's own
+doc comment explains why it exists, not a list here. `cuttlefish/config.py`
+holds the config-resolution logic `cuttlefish.cli` and `cuttlefish.fleet`
+both share (ADR-0009's own factoring, extending ADR-0007's). Live-
+verification history and real bugs a live run found and fixed are in each
+PR's own description and `docs/QUESTIONS.md`, not repeated here.
+
+Slice D2 (the pixel-art skin on D1's already-proven API) is next per the
+roadmap, not yet started.
 
 ## Known, accepted gaps — don't re-litigate
 
@@ -67,23 +81,38 @@ repeated here.
 - Its declared-allowlist-to-`--allowedTools` mapping is an honest
   approximation, not full parity with kopicode's KAN-987 policy gate.
   `docs/QUESTIONS.md` Q36.
-- satay-runtime is one process, one writer — no two *projects'* cuttlefish
-  tasks run concurrently yet (one project's own team of roles does, via
-  `satay.gather`, needing no multi-worker capability at all). satay-runtime's
-  own roadmap now follows cuttlefish-crew's needs rather than being a fixed
-  dependency; a concrete need gets filed — and, as of slice C, actually
-  built — there, not worked around here. `docs/QUESTIONS.md` Q33, Q42.
+- satay-runtime is one process, one writer *per store* — but the fleet
+  daemon now runs several *projects'* teams concurrently in one process
+  anyway (slice D1, ADR-0009): each project gets its own
+  `satay.control.run_app(data_dir=<root>/.satay)`, a fully independent
+  engine/store, coexisting as plain `asyncio` tasks — no subprocess, and no
+  need for satay-runtime's own Postgres/multi-worker milestone
+  (satay-runtime#100), which remains just as unneeded as it was for one
+  project's own `satay.gather`-based team concurrency. `docs/QUESTIONS.md`
+  Q33, Q42, Q48.
 - Two kopicode-backed team roles sharing one `--root` collide on kopicode's
   own per-working-tree session lock — real concurrent *editing* needs
   separate checkouts per role, not built yet. Not a bug; kopicode's lock is
   correctly guarding against two agents editing one uncommitted working
-  tree at once. `docs/QUESTIONS.md` Q44.
+  tree at once. Unaffected by the fleet daemon (every role in one project's
+  team still shares that project's one `root`). `docs/QUESTIONS.md` Q44.
 - Secrets are injected directly, never brokered — the agent process itself
   still holds every secret it's given in the clear, inside its own sandbox
   or subprocess. A credential-broker/proxy is real future work, deliberately
   deferred. `docs/QUESTIONS.md` Q34, ADR-0006.
-- A project's secrets scope is a plain string (`--project NAME`), not a
-  formal `Project` entity — that's slice D's job. `docs/QUESTIONS.md` Q38.
+- A daemon-launched team (`cuttlefish serve`) declares no project secrets
+  beyond a backend's own ambient credential names — a project needing
+  `--secret`-declared names still runs via the CLI directly, not the
+  dashboard, this slice. A real, named simplification, not an oversight.
+  `cuttlefish.fleet.daemon.FleetDaemon.start`'s own docstring.
+- A daemon restart loses every in-memory running-team handle — there is no
+  separate process supervising `cuttlefish serve` itself yet, so killing it
+  necessarily ends every team it owns. A project's status view still
+  renders correctly afterward from its own episodic journal. ADR-0009's own
+  Consequences section.
+- The dashboard (`frontend/`) is plain UI, not the pixel-art office view
+  the original vision sketched — that's slice D2, a rendering layer on top
+  of this exact same API, not started yet. `docs/SLICES.md`.
 
 ## Workflow conventions
 
@@ -118,6 +147,17 @@ These follow directly from the ADRs. Hold them without re-litigating them here.
   only ever called *inside* the already-side-effecting delegation task; the
   result is a local variable handed straight to `backend.delegate()`, never
   returned or passed to another task. ADR-0006.
+- **`cuttlefish.runtime` is `contextvars`-backed, not a plain global.** The
+  fleet daemon depends on this to run several projects' teams concurrently
+  without cross-contaminating each other's `Runtime` (episodic store,
+  secrets store, backend selection) — reverting it to a plain global would
+  silently reintroduce that exact bug. ADR-0009, `docs/QUESTIONS.md` Q49.
+- **A daemon-side call to satay's own control API (`stop`/`steer`) must go
+  through `asyncio.to_thread`, never called directly.** The fleet daemon and
+  the `satay.control.run_app` server it's calling share one process and one
+  event loop (ADR-0009) — a direct, blocking `urllib` call deadlocks against
+  the very server it's waiting on. `cuttlefish.fleet.daemon.FleetDaemon
+  .stop`/`.steer`'s own docstrings; verified live, not just reasoned about.
 
 ## Secrets
 
