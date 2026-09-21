@@ -13,6 +13,17 @@ make check
 echo "[pre-push] make test-all — full suite: unit + integration + e2e"
 make test-all
 
+# The dashboard frontend (frontend/, ADR-0009) is a required CI check
+# ("Dashboard frontend"), but it needs `npm ci` to have been run at least once —
+# skip, don't fail, when it hasn't, the same posture this hook already takes for
+# a missing gitleaks binary. CI is still the backstop either way.
+if [ -d frontend/node_modules ]; then
+	echo "[pre-push] make frontend-check frontend-test frontend-build — svelte-check + tsc + vitest + build"
+	make frontend-check frontend-test frontend-build
+else
+	echo "[pre-push] SKIP frontend checks — frontend/node_modules missing (run: cd frontend && npm ci)"
+fi
+
 # Secret scanning is a required CI check, but it needs a gitleaks binary this repo
 # does not vendor. Run it when it is there; never fail a push over the tool being
 # absent, because CI's Security workflow scans full history either way.

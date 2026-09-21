@@ -13,7 +13,11 @@ mid-flight (ADR-0008's own honestly-named limit). Slice D (the
 dashboard/office UI) is split into **D1** - a formal `Project` entity, the
 fleet daemon (`cuttlefish serve`), and a plain (non-game) UI wired to real
 data - and **D2**, the pixel-art skin on top of D1's already-proven API
-(ADR-0009). D1 is designed (ADR-0009) and in progress; D2 not yet started.
+(ADR-0009). Both are complete and merged: each role now renders as an
+animated pixel-art sprite (`frontend/src/lib/pixel/`) whose pose/tint
+reflects its live status, no new rendering dependency (Q51); `cuttlefish
+serve` auto-picks a free port (Q52); `make demo`/`scripts/demo.sh` is the
+one-command way to run a daemon and the dashboard together locally.
 
 ## Problem
 
@@ -197,10 +201,23 @@ the operator actually babysits today.
   secrets store concurrently (Q49). This closes "many projects, many teams,
   concurrently" without satay-runtime's own multi-worker milestone (Q48).
 
+- **Slice D2 (ADR-0009's own "D2 renders instead"): the pixel-art skin.**
+  Each role renders as a small animated pixel-art cuttlefish
+  (`frontend/src/lib/pixel/`), tinted and posed by its live `RoleStatus` -
+  a plain CSS grid of colored cells (`PixelGrid.svelte`), no canvas or
+  game-rendering library (Q51). `OfficeScene.svelte` (a small CSS room)
+  renders every role's sprite in the project detail view, additive above
+  the existing steer-chat cards; the portfolio's own cards render the same
+  sprites at a smaller scale in place of D1's plain status-chip rows.
+  `SpriteGallery.svelte` shows every status with no daemon connection
+  needed - the fastest way to see the art. `cuttlefish.fleet.server
+  .find_free_port` (Q52) makes `cuttlefish serve` auto-pick a free port
+  instead of failing when its default is taken; `scripts/demo.sh`/`make
+  demo` is the one-command way to run a daemon and the dashboard together,
+  dev-playbook's own "runnable in one command" guidance.
+
 **Out.**
 
-- The pixel-art office rendering and sprite animation itself (slice D2) -
-  D1 ships a plain UI wired to the same API D2 will render instead.
 - The runner/hosting abstraction and remote demo viewing (slice E, was D).
 - The meetings-with-avatar feature. Explicitly deferred to last, after
   everything else in this roadmap, by the operator's own instruction.
@@ -239,6 +256,8 @@ the operator actually babysits today.
 | R13 | A `Project` has a stable identity (independent of any single directory's own `.cuttlefish/`) that a team's roles and their personas attach to. | Must-have (slice D1) |
 | R14 | An operator can start, stop, and steer several registered projects' teams concurrently from one long-running process, without satay-runtime's own multi-worker milestone. | Must-have (slice D1) |
 | R15 | A plain (non-game) UI renders every registered project's live role status and lets an operator steer a role's work, wired to the same API the eventual pixel-art view (D2) will render against. | Must-have (slice D1) |
+| R16 | Each role renders as an animated sprite whose pose/tint reflects its live status, at both the zoomed-out (portfolio) and zoomed-in (project detail) scale, with no new rendering dependency. | Delivered (slice D2) |
+| R17 | An operator can bring up a fleet daemon and the dashboard together with one command, on a machine that may already have something else bound to the daemon's default port. | Delivered (slice D2) |
 
 ## Shape
 
@@ -260,6 +279,8 @@ the operator actually babysits today.
 | S14 | `cuttlefish.runtime`'s `_runtime` global becomes a `contextvars.ContextVar`, so N projects' teams hold independent `Runtime`s concurrently in one process | ADR-0009 |
 | S15 | `cuttlefish.fleet.FleetDaemon` (`cuttlefish serve`) - one `asyncio.create_task` per registered project's team, each its own `satay.control.run_app(data_dir=<root>/.satay)`, no subprocess; a loopback-only FastAPI surface (`GET/POST /api/projects...`) for start/stop/steer/status | ADR-0009 |
 | S16 | A Svelte + TypeScript + Vite frontend (`frontend/`) - a portfolio grid and a per-project detail/steer-chat view, plain UI wired to S15's API | ADR-0009 |
+| S17 | `frontend/src/lib/pixel/` - a small hand-authored pixel-art sprite (`cuttlefish.ts`) rendered as a CSS grid (`PixelGrid.svelte`), wrapped by `RoleSprite.svelte`/`OfficeScene.svelte`/`SpriteGallery.svelte`; replaces D1's plain status chips in `ProjectCard`/adds to `ProjectDetail` | Q51 |
+| S18 | `cuttlefish.fleet.server.find_free_port` - `cuttlefish serve` auto-picks a free port; `scripts/demo.sh`/`make demo` - one-command daemon+dashboard, dev-playbook compliance | Q52 |
 
 ## Affordances
 
@@ -276,14 +297,16 @@ the operator actually babysits today.
 | `cuttlefish run --project NAME --secret NAME` | CLI flags | Declares this task's secrets scope and which named secrets (beyond a backend's own ambient credential names) it may read (ADR-0006) |
 | `cuttlefish secrets generate-key\|set\|get\|list\|delete` | CLI commands | Manages the store directly - the only way to actually populate it |
 | `cuttlefish projects add\|list\|remove` | CLI commands | Manages the `Project` registry without the daemon running at all (ADR-0009) |
-| `cuttlefish serve` | CLI command | Starts the fleet daemon - launches/owns every registered project's team concurrently, prints its own loopback base URL/token | ADR-0009 |
+| `cuttlefish serve [--port N]` | CLI command | Starts the fleet daemon - launches/owns every registered project's team concurrently, prints its own loopback base URL/token; auto-picks the next free port if `N` (or the default) is taken (Q52) | ADR-0009 |
+| `make demo` / `scripts/demo.sh` | Make target | Starts a fleet daemon and the dashboard's dev server together, one command, prints both URLs - the dev-playbook-compliant way to actually try this out locally |
 
 **UI.**
 
 | Affordance | Kind | Wires to |
 |------------|------|----------|
-| Portfolio grid (project cards, each role's status chip, start/stop) | Svelte view | `GET /api/projects`, `POST /api/projects/{id}/start\|stop` (ADR-0009) |
-| Project detail view (role cards, steer-chat panel, event tail) | Svelte view | `GET /api/projects/{id}/status`, `POST /api/projects/{id}/steer` (ADR-0009) |
+| Portfolio grid (project cards, each role rendered as a small pixel-art sprite, start/stop) | Svelte view | `GET /api/projects`, `POST /api/projects/{id}/start\|stop` (ADR-0009); sprite rendering is client-side only (Q51) |
+| Project detail view (an animated office scene per role, steer-chat panel, event tail) | Svelte view | `GET /api/projects/{id}/status`, `POST /api/projects/{id}/steer` (ADR-0009); sprite rendering is client-side only (Q51) |
+| Sprite gallery (every `RoleStatus`, live-rendered) | Svelte view | No API - reachable from the connect screen or the portfolio topbar with no daemon connection |
 
 ## Implementation decisions
 
@@ -360,18 +383,17 @@ E2B.
   fleet daemon extends this same finding to *many projects'* teams
   concurrently too, Q48). #99 (document/example external steering) is
   effectively superseded by #101's own worked example.
-- **This pivot is bigger than slices A-D1 alone.** Slice D2 (the pixel-art
-  skin on D1's API), slice E (the runner/hosting abstraction unifying
-  "tunnel to an always-on machine" and "cuttlefish-crew provisions a hosted
-  deployment itself"), and a deferred, explicitly-last slice F
-  (agent-initiated meetings, TTS + avatar, facilitated through existing
-  video-call infrastructure rather than built from scratch) are all real,
-  discussed, and intended. Slice B (ADR-0006), slice C's team-concurrency
-  half (ADR-0007) and steering half (ADR-0008), and slice D1 (ADR-0009) are
-  all now done or in progress. Slice B was inserted after slice A was first
-  scoped, once it became clear that multiple projects each needing
-  distinct, isolated credentials is a slice-A-adjacent pain, not a
-  slice-E-hosting-only one (Q34).
+- **This pivot is bigger than slices A-D2 alone.** Slice E (the
+  runner/hosting abstraction unifying "tunnel to an always-on machine" and
+  "cuttlefish-crew provisions a hosted deployment itself"), and a deferred,
+  explicitly-last slice F (agent-initiated meetings, TTS + avatar,
+  facilitated through existing video-call infrastructure rather than built
+  from scratch) are both real, discussed, and intended. Slice B (ADR-0006),
+  slice C's team-concurrency half (ADR-0007) and steering half (ADR-0008),
+  and slice D (both D1 and D2, ADR-0009) are all now done. Slice B was
+  inserted after slice A was first scoped, once it became clear that
+  multiple projects each needing distinct, isolated credentials is a
+  slice-A-adjacent pain, not a slice-E-hosting-only one (Q34).
 - **A daemon restart loses every in-memory running-team handle (ADR-0009).**
   `cuttlefish serve` driving N projects' teams as in-process `asyncio` tasks
   means killing the daemon necessarily ends every team it owns - there is no

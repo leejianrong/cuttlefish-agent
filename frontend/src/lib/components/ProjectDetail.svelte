@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { EpisodicEventView, FleetClient, ProjectSummary } from "../api";
   import EventLog from "./EventLog.svelte";
+  import OfficeScene from "./OfficeScene.svelte";
   import RoleSteerCard from "./RoleSteerCard.svelte";
 
   let {
@@ -64,6 +65,9 @@
     </header>
 
     {#if project.running}
+      <OfficeScene
+        roles={Object.entries(project.status).map(([name, status]) => ({ name, status }))}
+      />
       <section class="roles">
         {#each Object.entries(project.status) as [role, status] (role)}
           <RoleSteerCard {client} {projectId} {role} {status} />
@@ -151,7 +155,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.85rem;
-    margin-bottom: 1.25rem;
+    margin: 0.9rem 0 1.25rem;
   }
 
   .stop {

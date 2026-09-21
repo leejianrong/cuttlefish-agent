@@ -7,10 +7,12 @@
     client,
     onOpenProject,
     onDisconnect,
+    onShowGallery,
   }: {
     client: FleetClient;
     onOpenProject: (id: string) => void;
     onDisconnect: () => void;
+    onShowGallery: () => void;
   } = $props();
 
   let projects = $state<ProjectSummary[]>([]);
@@ -51,6 +53,7 @@
     <h1>Fleet</h1>
     <div class="topbar-right">
       <span class="endpoint mono">{client.baseUrl}</span>
+      <button class="ghost" onclick={onShowGallery}>Sprite gallery</button>
       <button class="ghost" onclick={onDisconnect}>Disconnect</button>
     </div>
   </header>

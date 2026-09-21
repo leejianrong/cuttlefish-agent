@@ -148,10 +148,10 @@ V1 and V2 proved one durable, sandboxed delegation to kopicode. V3 is the
 pivot: cuttlefish becomes cuttlefish-crew, a fleet manager running teams of
 coding sub-agents across many projects at once. See `docs/PLAN.md` for the
 full problem/solution and `docs/QUESTIONS.md` Q28 onward for the decisions
-behind it. Slices A, B, and C (both halves) are built; slice D1 (below) is
-designed and in progress; slices D2, E, and F are named and real but not yet
-planned in this file - each gets its own build plan once the slice before it
-ships and the interface it needs actually exists.
+behind it. Slices A, B, C (both halves), D1, and D2 are built; slices E and
+F are named and real but not yet planned in this file - each gets its own
+build plan once the slice before it ships and the interface it needs
+actually exists.
 
 ### Slice A: a pluggable agent backend, and the external rebrand
 
@@ -546,15 +546,93 @@ each question's own "cost if wrong."
 - A role name supplied to `start()` that isn't in the project's registered
   `roles` runs with no persona prefix, not a rejected request.
 
-### Slices D2, E, F: not yet fully planned
+### Slice D2: the pixel-art skin (done)
+
+**Delivers:** the vision memory's "sub-agents as animated sprites/avatars
+whose state reflects real status" (`docs/PLAN.md`'s Out-of-scope note on
+D1 naming this as D2's job).
+
+**Build plan**
+
+1. `frontend/src/lib/pixel/cuttlefish.ts` (Q51): a small pixel-art
+   cuttlefish mascot authored as row-strings (ASCII-art, proofreadable as
+   text) - two frames (`a`/`b`, tentacles alternating) and a status-tint
+   palette (`paletteFor`) mapping each `RoleStatus` to a distinct head/
+   tentacle color, eyes/pupils constant across every status. `STATUS_GLYPH`
+   is a small overlay glyph per status (`z`/`!`/`✓`/`×`; `null` for
+   `working`, since the wiggle animation itself already signals activity).
+2. `frontend/src/lib/pixel/PixelGrid.svelte`: renders a frame as a plain
+   CSS grid of colored cells - no canvas, no game library (Q51).
+3. `RoleSprite.svelte`: `PixelGrid` + the glyph overlay + a `working`-only
+   frame-swap animation (`setInterval`, ~450ms) that respects
+   `prefers-reduced-motion` (dev-playbook's own "quality floor" guidance).
+4. `OfficeScene.svelte`: a small CSS-only room (wall/floor) holding one
+   `RoleSprite` per role, wired into `ProjectDetail` above the existing
+   steer-chat cards (additive - the cards, and `StatusChip`, are unchanged).
+5. `ProjectCard.svelte` (the portfolio's zoomed-out view): the plain
+   per-role `StatusChip` row replaced with small `RoleSprite`s - the same
+   character, smaller, satisfying "don't render every sprite across every
+   project on one screen" (the vision memory's own reasoning for needing a
+   portfolio view at all) while keeping one consistent visual language
+   between the zoomed-out and zoomed-in layers.
+6. `SpriteGallery.svelte`: every `RoleStatus` rendered side by side,
+   reachable from the connect screen and the portfolio topbar with **no
+   daemon connection needed** - the fastest way to see the art actually
+   render.
+7. `frontend/src/lib/pixel/cuttlefish.test.ts` (vitest, new - `npm run
+   test`/`make frontend-test`): the pure data layer (frame shape, palette
+   completeness/distinctness, glyph invariants), independent of rendering.
+8. `cuttlefish.fleet.server.find_free_port` (Q52) - `cuttlefish serve`
+   auto-picks the next free port instead of failing when its default is
+   taken, and `scripts/demo.sh`/`make demo` - the one-command way to run a
+   daemon and the dashboard together and see this slice, dev-playbook's own
+   "runnable in one command" guidance, verified live (a real terminal
+   Ctrl-C cleanly stops the whole process group; a deliberately-occupied
+   default port is skipped and the next one is used, printed correctly).
+
+**Demo:** `make demo` - starts a fleet daemon and the dashboard together,
+prints the URL/token to paste in. `cuttlefish projects add`/registering a
+project through the UI, then starting a team, shows each role as an
+animated cuttlefish in `OfficeScene`, tinted and posed by its live status;
+the portfolio view shows the same characters, smaller, per project card.
+`SpriteGallery` (linked from both the connect screen and the portfolio) is
+reachable with no daemon at all.
+
+**Verified live, 2026-09-22**: screenshotted (Playwright, headless
+Chromium, both color schemes) against a real running daemon with a
+deliberately-slow fake backend - `working` sprites visibly alternate
+frames over consecutive screenshots; `ProjectDetail` correctly falls back
+to the "start a team" form once a team finalizes; the small (portfolio-
+scale) rendering stays legible.
+
+**Rests on assumptions:** Q51 (no game/rendering library - revisit only if
+a future need genuinely requires many more simultaneously-animating
+sprites than a handful of small DOM nodes can hold).
+
+### Test plan (D2)
+
+#### Unit
+
+- `cuttlefish.ts`'s frame pair is one consistent rectangular shape; every
+  character either frame uses has a defined color in every status's
+  palette; every status has a distinct head tint; eyes/pupils stay
+  constant across every status; every non-`working` status has exactly one
+  glyph, `working` has none.
+
+#### Manual / visual (no headless-DOM test harness added this slice)
+
+- Playwright screenshots against a live `npm run dev` + a real
+  `cuttlefish serve`, both color schemes, at gallery scale and portfolio
+  scale - the actual verification this slice's own PR was built against
+  (component-level DOM testing, e.g. `@testing-library/svelte`, was not
+  added; `cuttlefish.ts`'s own unit tests cover the part most likely to
+  silently regress).
+
+### Slices E, F: not yet fully planned
 
 Named and real, sketched in `docs/PLAN.md`'s Open risks and
-`docs/QUESTIONS.md` Q28-Q50, but none has its own build plan yet.
+`docs/QUESTIONS.md` Q28-Q52, but neither has its own build plan yet.
 
-- **Slice D2 - the pixel-art skin**: sub-agents as animated sprites whose
-  state (idle/working/blocked/reviewing) reflects D1's already-built status
-  API, replacing D1's plain status chips/cards - a rendering layer on an
-  already-proven API, not a new data model.
 - **Slice E - runners and hosting**: a registered-runner abstraction (an
   always-on operator machine, or a cuttlefish-crew-provisioned deployment)
   fronted by a stable URL, closing the "view a real demo without being at
