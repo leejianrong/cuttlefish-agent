@@ -3,11 +3,21 @@
 One satay run, one ``task_id`` — not one child workflow per role (ADR-0007's own
 Context explains why: a child's run id isn't known until after it starts, and
 ``run_task``'s own journaling needs its ``task_id`` from the first line). Every
-role's delegation is a concurrent ``satay.gather`` of the same
+role's delegation is, by default, a concurrent ``satay.gather`` of the same
 ``delegate_to_agent_backend`` task ``cuttlefish.workflow.run_task`` already uses,
 tagged with ``role`` on every event it writes so one shared journal still reads back
 as N independent threads of activity, and so ``maybe_handover`` can checkpoint each
 role on its own, undisturbed by the others.
+
+Two or more kopicode-backed roles sharing one ``root`` (every role in a team
+already does, ``TeamInput.root`` being singular) are the one exception: kopicode's
+own per-working-tree session lock refuses a second concurrent invocation against
+the same root (docs/QUESTIONS.md Q44), so ``_dispatch_round`` falls back to
+one-at-a-time dispatch for exactly that case instead — real, but not concurrent for
+that case, rather than a hard `DelegationFailed`. A separate git worktree/checkout
+per role is the actual fix for genuine concurrent editing, deliberately deferred
+until this fallback's own cost is felt (ADR-0002's "don't build ahead of a proven
+need").
 """
 
 from __future__ import annotations
@@ -75,6 +85,67 @@ class TeamInput(TypedDict):
     steering_grace: NotRequired[float]
 
 
+def _needs_sequential_dispatch(active_names: list[str], agent_backend: str) -> bool:
+    """Whether this round's delegations must run one-at-a-time instead of via
+    ``satay.gather`` (docs/QUESTIONS.md Q44).
+
+    Every role in a team already shares one ``root`` (``TeamInput.root`` is
+    singular, not per-role) -- so two or more active kopicode-backed roles in one
+    round always collide on kopicode's own per-working-tree session lock, not just
+    in some edge case. Any other backend, or a single active role, is unaffected.
+    """
+    return agent_backend == "kopicode" and len(active_names) > 1
+
+
+async def _dispatch_round(
+    active_names: list[str],
+    *,
+    current_text: dict[str, str],
+    role_by_name: dict[str, RoleInput],
+    root: str,
+    project: str,
+    agent_backend: str,
+) -> list[DelegationOutcome | BaseException]:
+    """Run one round's delegations, choosing concurrent (``satay.gather``) or
+    sequential dispatch per :func:`_needs_sequential_dispatch` (Q44) -- the
+    sequential branch mirrors ``gather(..., return_exceptions=True)``'s own
+    collect-mode contract by hand, catching each role's failure rather than
+    letting one role's exception stop the rest of the round.
+    """
+    if _needs_sequential_dispatch(active_names, agent_backend):
+        outcomes: list[DelegationOutcome | BaseException] = []
+        for name in active_names:
+            try:
+                outcomes.append(
+                    await delegate_to_agent_backend(
+                        current_text[name],
+                        root,
+                        allow=role_by_name[name].get("allow", DEFAULT_SHELL_ALLOWLIST),
+                        project=project,
+                        secret_names=role_by_name[name].get("secret_names"),
+                    )
+                )
+            except Exception as exc:
+                # Collected, not re-raised -- mirrors gather's own return_exceptions=True
+                # so one role's failure doesn't stop the rest of this round.
+                outcomes.append(exc)
+        return outcomes
+
+    return await satay.gather(
+        *[
+            delegate_to_agent_backend(
+                current_text[name],
+                root,
+                allow=role_by_name[name].get("allow", DEFAULT_SHELL_ALLOWLIST),
+                project=project,
+                secret_names=role_by_name[name].get("secret_names"),
+            )
+            for name in active_names
+        ],
+        return_exceptions=True,
+    )
+
+
 def _failure_reason(outcome: BaseException) -> str:
     """A journalable reason string for a collected `gather` failure (ADR-0027).
 
@@ -138,18 +209,13 @@ async def run_team(team_input: TeamInput) -> dict[str, Any]:
                 ),
             )
 
-        outcomes = await satay.gather(
-            *[
-                delegate_to_agent_backend(
-                    current_text[name],
-                    root,
-                    allow=role_by_name[name].get("allow", DEFAULT_SHELL_ALLOWLIST),
-                    project=project,
-                    secret_names=role_by_name[name].get("secret_names"),
-                )
-                for name in active_names
-            ],
-            return_exceptions=True,
+        outcomes = await _dispatch_round(
+            active_names,
+            current_text=current_text,
+            role_by_name=role_by_name,
+            root=root,
+            project=project,
+            agent_backend=runtime_.agent_backend,
         )
 
         next_active: list[str] = []

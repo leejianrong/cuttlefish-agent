@@ -628,6 +628,90 @@ sprites than a handful of small DOM nodes can hold).
   added; `cuttlefish.ts`'s own unit tests cover the part most likely to
   silently regress).
 
+### D1 live-usage fixes: daemon allowlist + kopicode-lock sequential fallback (done)
+
+**Delivers:** two real gaps a live 2-role dashboard run against a real repo
+surfaced (`docs/QUESTIONS.md` Q53, Q54) - neither is a new capability, both
+close a gap D1/D2 left open once actually exercised end to end.
+
+**Build plan**
+
+1. `Project.allow`/`ProjectStore` (Q53): a persisted `allow: tuple[tuple[str,
+   ...], ...]` field, same shape and reasoning as `persona` (Q31) - reviewed
+   once per project, not retyped per `cuttlefish serve` start. A migration
+   guarded by `PRAGMA table_info` adds `allow_json` to an operator's existing,
+   pre-this-slice `~/.cuttlefish/projects.db` in place, rather than requiring
+   a fresh registry.
+2. `cuttlefish projects add --allow CMD` (repeatable, reusing `_parse_allow`'s
+   own `shlex.split` convention) and `_project_dict`'s JSON output carry it.
+3. `cuttlefish.fleet.server`: `POST /api/projects` accepts `allow`, a new
+   `PATCH /api/projects/{id}/allow` mirrors the existing `.../roles` route,
+   and `_project_json` reports it.
+4. `cuttlefish.fleet.daemon._build_role_inputs` (extracted from `start()` for
+   direct unit testing): every role's `RoleInput` now carries the project's
+   declared `allow`, team-wide - the actual fix for the `DelegationRefused`
+   Q53 names.
+5. `RegisterProjectForm.svelte` gains an "Allowed shell commands" textarea
+   (one command per line, whitespace-split - a deliberate simplification
+   over the CLI's own shell-quote-aware `shlex.split`, named in the
+   component itself) and `FleetClient.updateAllow`/`registerProject`'s input
+   type carry `allow`.
+6. `cuttlefish.team._needs_sequential_dispatch`/`_dispatch_round` (Q54):
+   every role in a team already shares one `root`, so two or more active
+   kopicode-backed roles in a round dispatch one-at-a-time instead of via
+   `satay.gather` - a hand-rolled mirror of `gather(...,
+   return_exceptions=True)`'s own collect-mode contract, so one role's
+   failure still doesn't stop the round. Any other backend, or a single
+   active role, is unaffected.
+
+**Demo:** `cuttlefish projects add --name demo --root <repo> --allow 'uv run
+pytest' --role builder:...` then `cuttlefish serve` - a dashboard-started
+team's builder role can now actually run the command the project declared,
+where it previously always got `DelegationRefused`. A 2+-role kopicode-backed
+team against one real repo now finishes instead of the second role failing
+on kopicode's own "another kopicode session is already running" lock error.
+
+**Verified live, 2026-09-22**: `cuttlefish projects add --allow`/`list`
+round-tripped against a real (throwaway) `~/.cuttlefish/projects.db`; a
+hand-built legacy `projects.db` (the exact pre-migration schema, `allow_json`
+column absent) opened cleanly through `ProjectStore.open` with `allow`
+correctly defaulting to `()`; the full suite including
+`tests/integration/test_team_steering.py`'s real-kopicode two-role,
+same-`root` steering test (`requires_kopicode`) passes with the sequential
+fallback engaged, and `make ci`'s full scope (backend + `frontend-check`/
+`frontend-test`/`frontend-build`) is green.
+
+**Rests on assumptions:** the interim, not the real, fix for Q54 - separate
+git worktrees per role stays deferred until this fallback's own cost is felt
+(ADR-0002). Secrets-store access for daemon-started teams and the dashboard
+not surfacing `last_team_id` are named, not built, this slice (D1D2
+live-usage findings memory).
+
+### Test plan (D1 live-usage fixes)
+
+#### Unit
+
+- `ProjectStore`: `allow` round-trips through `register`/`get`, `update_allow`
+  replaces the whole set, a legacy (pre-`allow_json`) on-disk database
+  migrates in place on open.
+- `FleetDaemon._build_role_inputs`: every role's `RoleInput` carries the
+  project's declared `allow` team-wide, alongside the existing persona-prefix
+  behavior.
+- `cuttlefish.team._needs_sequential_dispatch`: true only for kopicode with
+  more than one active role; false for any other backend or a lone role.
+
+#### Integration/e2e
+
+- `cuttlefish projects add --allow`/`add` CLI round trip.
+- Fleet HTTP surface: register-with-`allow` then get round-trips it,
+  `PATCH .../allow` replaces the whole set, an unknown project id is 404.
+- `run_team`'s existing missing-kopicode-binary tests (two roles, default
+  `agent_backend`) already exercise the sequential-dispatch branch on every
+  run, order-agnostic by construction.
+- `test_team_steering.py`'s real-kopicode two-role test (`requires_kopicode`)
+  is the one live, non-mocked verification that the sequential fallback
+  actually avoids the lock collision it was built for.
+
 ### Slices E, F: not yet fully planned
 
 Named and real, sketched in `docs/PLAN.md`'s Open risks and

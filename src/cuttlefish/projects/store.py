@@ -40,9 +40,17 @@ CREATE TABLE IF NOT EXISTS projects (
     root TEXT NOT NULL,
     secrets_scope TEXT NOT NULL,
     roles_json TEXT NOT NULL,
-    last_team_id TEXT
+    last_team_id TEXT,
+    allow_json TEXT NOT NULL DEFAULT '[]'
 )
 """
+
+#: `allow_json` was added after slice D1 shipped -- an operator's existing,
+#: on-disk `projects.db` predates it. `CREATE TABLE IF NOT EXISTS` alone would
+#: leave that column missing on every such file; `ProjectStore.__init__` runs
+#: this once, guarded by `PRAGMA table_info`, so a fresh database (which already
+#: has the column from `_CREATE_TABLE`) is a harmless no-op.
+_ADD_ALLOW_COLUMN = "ALTER TABLE projects ADD COLUMN allow_json TEXT NOT NULL DEFAULT '[]'"
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +71,13 @@ class Project:
     ``secrets_scope`` carries forward exactly the meaning `--project NAME` already had
     (docs/QUESTIONS.md Q38) — defaulting to ``name`` so a project registered against an
     existing checkout keeps reading whatever `SecretsStore` scope it already used.
+
+    ``allow`` is durable here for the same reason ``persona`` is (Q31, Q53): a
+    project's trusted shell-command set is reviewed once, not retyped per
+    `FleetDaemon.start` call — a daemon-launched team has no CLI `--allow` flag
+    of its own to carry it. Defaults to ``()``, the same "no shell command
+    allowed" posture `policy.DEFAULT_SHELL_ALLOWLIST` already holds everywhere
+    else nothing is declared.
     """
 
     id: str
@@ -71,6 +86,7 @@ class Project:
     secrets_scope: str
     roles: tuple[RoleDefinition, ...] = field(default_factory=tuple)
     last_team_id: str | None = None
+    allow: tuple[tuple[str, ...], ...] = field(default_factory=tuple)
 
     def role(self, name: str) -> RoleDefinition | None:
         """The registered role definition named `name`, or `None` if this project
@@ -96,6 +112,14 @@ def _decode_roles(raw: str) -> tuple[RoleDefinition, ...]:
     )
 
 
+def _encode_allow(allow: tuple[tuple[str, ...], ...]) -> str:
+    return json.dumps([list(command) for command in allow])
+
+
+def _decode_allow(raw: str) -> tuple[tuple[str, ...], ...]:
+    return tuple(tuple(command) for command in json.loads(raw))
+
+
 def _row_to_project(row: sqlite3.Row) -> Project:
     return Project(
         id=row["id"],
@@ -104,6 +128,7 @@ def _row_to_project(row: sqlite3.Row) -> Project:
         secrets_scope=row["secrets_scope"],
         roles=_decode_roles(row["roles_json"]),
         last_team_id=row["last_team_id"],
+        allow=_decode_allow(row["allow_json"]),
     )
 
 
@@ -114,6 +139,9 @@ class ProjectStore:
         self._conn = connection
         self._conn.row_factory = sqlite3.Row
         self._conn.execute(_CREATE_TABLE)
+        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(projects)")}
+        if "allow_json" not in columns:
+            self._conn.execute(_ADD_ALLOW_COLUMN)
         self._conn.commit()
 
     @classmethod
@@ -145,6 +173,7 @@ class ProjectStore:
         root: str,
         secrets_scope: str | None = None,
         roles: tuple[RoleDefinition, ...] = (),
+        allow: tuple[tuple[str, ...], ...] = (),
     ) -> Project:
         """Register a new project. `secrets_scope` defaults to `name` (Q38)."""
         project = Project(
@@ -153,10 +182,12 @@ class ProjectStore:
             root=root,
             secrets_scope=secrets_scope if secrets_scope is not None else name,
             roles=roles,
+            allow=allow,
         )
         self._conn.execute(
-            "INSERT INTO projects (id, name, root, secrets_scope, roles_json, last_team_id) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO projects "
+            "(id, name, root, secrets_scope, roles_json, last_team_id, allow_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 project.id,
                 project.name,
@@ -164,6 +195,7 @@ class ProjectStore:
                 project.secrets_scope,
                 _encode_roles(project.roles),
                 project.last_team_id,
+                _encode_allow(project.allow),
             ),
         )
         self._conn.commit()
@@ -183,6 +215,14 @@ class ProjectStore:
         self.get(project_id)  # raises ProjectNotFoundError if unknown
         self._conn.execute(
             "UPDATE projects SET roles_json = ? WHERE id = ?", (_encode_roles(roles), project_id)
+        )
+        self._conn.commit()
+        return self.get(project_id)
+
+    def update_allow(self, project_id: str, allow: tuple[tuple[str, ...], ...]) -> Project:
+        self.get(project_id)  # raises ProjectNotFoundError if unknown
+        self._conn.execute(
+            "UPDATE projects SET allow_json = ? WHERE id = ?", (_encode_allow(allow), project_id)
         )
         self._conn.commit()
         return self.get(project_id)

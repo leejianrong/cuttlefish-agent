@@ -66,6 +66,24 @@ def _compose_role_text(role_def: RoleDefinition | None, text: str) -> str:
     return f"You are {role_def.name}. {role_def.persona}\n\n{text}"
 
 
+def _build_role_inputs(project: Project, roles: list[RoleStart]) -> list[RoleInput]:
+    """`roles`, composed with `project`'s own persistent state -- its registered
+    personas (`_compose_role_text`) and its declared `allow` (Q53), applied
+    team-wide, the same "one flag, every role" posture the CLI's own
+    `run-team --allow` already holds. A project with no declared `allow` still
+    gets `policy.DEFAULT_SHELL_ALLOWLIST` (no shell command at all) -- see
+    `cuttlefish.team.RoleInput`'s own docstring for that default."""
+    allow = [list(command) for command in project.allow]
+    return [
+        {
+            "name": role["name"],
+            "text": _compose_role_text(project.role(role["name"]), role["text"]),
+            "allow": allow,
+        }
+        for role in roles
+    ]
+
+
 class FleetDaemon:
     """Owns the `Project` registry and every currently-running team."""
 
@@ -104,13 +122,7 @@ class FleetDaemon:
             raise FleetError(f"project {project_id!r} already has a running team")
 
         team_id = uuid.uuid4().hex
-        role_inputs: list[RoleInput] = [
-            {
-                "name": role["name"],
-                "text": _compose_role_text(project.role(role["name"]), role["text"]),
-            }
-            for role in roles
-        ]
+        role_inputs = _build_role_inputs(project, roles)
 
         loop = asyncio.get_running_loop()
         ready: asyncio.Future[tuple[str, str]] = loop.create_future()

@@ -50,6 +50,26 @@ def test_add_then_list_round_trips(tmp_path: Path, capsys: pytest.CaptureFixture
     assert listed["id"] == added["id"]
 
 
+def test_add_with_allow_round_trips(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code = cli.main(
+        [
+            "projects",
+            "add",
+            "--name",
+            "demo",
+            "--root",
+            str(tmp_path / "demo"),
+            "--allow",
+            "uv run pytest",
+            "--allow",
+            "go test",
+        ]
+    )
+    assert exit_code == cli.EXIT_OK
+    added = json.loads(capsys.readouterr().out)
+    assert added["allow"] == [["uv", "run", "pytest"], ["go", "test"]]
+
+
 def test_remove_an_unknown_id_fails(capsys: pytest.CaptureFixture[str]) -> None:
     exit_code = cli.main(["projects", "remove", "no-such-id"])
     assert exit_code == cli.EXIT_TASK_FAILED
