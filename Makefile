@@ -1,5 +1,6 @@
 .DEFAULT_GOAL := help
-.PHONY: help dev lint type check test test-all test-sandbox-live ci install-hooks
+.PHONY: help dev lint type check test test-all test-sandbox-live ci install-hooks \
+	frontend-install frontend-check frontend-build
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -35,7 +36,20 @@ test-sandbox-live: ## create/exec/snapshot/destroy against a real E2B account â€
 	@read -r -p "continue? [y/N] " a; [ "$$a" = "y" ] || exit 1
 	uv run pytest -m requires_e2b_credential -q
 
-ci: check test-all ## Everything CI gates on (lint + mypy + full suite)
+# The dashboard frontend (frontend/, ADR-0009) -- this repo's first non-Python
+# build pipeline. `npm ci` (not `install`) so a stale lockfile fails loudly in CI
+# rather than silently drifting, the same discipline `uv sync --frozen` already
+# holds for the Python side.
+frontend-install: ## npm ci in frontend/
+	cd frontend && npm ci
+
+frontend-check: ## svelte-check + tsc over frontend/ -- no build step
+	cd frontend && npm run check
+
+frontend-build: ## Production build of frontend/ to frontend/dist/
+	cd frontend && npm run build
+
+ci: check test-all frontend-check frontend-build ## Everything CI gates on (lint + mypy + full suite + frontend)
 
 install-hooks: ## Install the pre-push git hook
 	./scripts/install-hooks.sh

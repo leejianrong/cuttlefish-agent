@@ -1,15 +1,26 @@
-"""Process-wide configuration for cuttlefish's satay tasks.
+"""Per-task-tree configuration for cuttlefish's satay tasks (ADR-0009, Q49).
 
 A satay task's arguments and return value are durably journaled (satay's own
 ``journal.codec``), so a shared resource that isn't itself serialisable data — the
 episodic store, the LLM provider, which kopicode binary to shell out to — can't be
 passed as a task argument. It's configured once here, before a task's workflow is
 started, the same way an application configures a database connection pool once at
-process startup rather than threading it through every call.
+process startup — except that "process startup" is no longer the only caller: the
+fleet daemon (`cuttlefish.fleet`) drives several projects' teams concurrently in one
+process, each needing its own `Runtime` (its own episodic store, secrets store,
+backend selection). A plain module global can't hold more than one value at a time;
+a `contextvars.ContextVar` can, because `asyncio.create_task()` copies the calling
+context, so a task that calls `configure()` before spawning any of its own nested
+tasks (exactly what `cuttlefish.fleet`'s per-project launch already does) scopes
+every task nested under it, without leaking into a sibling project's task. A single
+`cuttlefish run`/`run-team` process calling `configure()` once at startup, exactly as
+every prior slice did, is unaffected — `ContextVar.set`/`.get` at the top of one
+linear flow behaves identically to the plain global it replaces.
 """
 
 from __future__ import annotations
 
+import contextvars
 from dataclasses import dataclass
 
 from cuttlefish.episodic.store import EpisodicStore
@@ -52,23 +63,27 @@ class Runtime:
     secrets_store: SecretsStore | None = None
 
 
-_runtime: Runtime | None = None
+_runtime: contextvars.ContextVar[Runtime | None] = contextvars.ContextVar(
+    "cuttlefish_runtime", default=None
+)
 
 
 def configure(runtime: Runtime) -> None:
-    """Set the process-wide runtime. Call once, before starting any workflow."""
-    global _runtime
-    _runtime = runtime
+    """Set the calling task tree's runtime. Call once, before starting any workflow —
+    and, for the fleet daemon, before spawning that project's own `asyncio.create_task`
+    (its context is copied at creation time, inheriting whatever was set here)."""
+    _runtime.set(runtime)
 
 
 def current() -> Runtime:
-    """The configured runtime. Raises if `configure` was never called."""
-    if _runtime is None:
+    """The configured runtime. Raises if `configure` was never called on this task's
+    own context (or an ancestor task's, per `asyncio`'s context-copy-at-creation rule)."""
+    runtime = _runtime.get()
+    if runtime is None:
         raise RuntimeError("cuttlefish.runtime.configure() must be called before running a task")
-    return _runtime
+    return runtime
 
 
 def reset() -> None:
     """Clear the configured runtime — test-only, so one test's config can't leak."""
-    global _runtime
-    _runtime = None
+    _runtime.set(None)

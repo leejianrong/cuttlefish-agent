@@ -1,0 +1,230 @@
+"""The fleet daemon (ADR-0009): launches and owns every registered project's team
+concurrently, in one process.
+
+One `asyncio.create_task` per project, each its own `satay.control.run_app` pointed
+at that project's own `<root>/.satay` -- never a subprocess (`docs/QUESTIONS.md`
+Q48/Q50). Status reads go straight to that project's own `.cuttlefish/episodic.db`
+(`cuttlefish.fleet.status`), never satay's own live worker state.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TypedDict
+
+import satay
+import satay.control
+
+from cuttlefish import runtime
+from cuttlefish.config import PreparedRun, prepare_run
+from cuttlefish.episodic.store import EpisodicEvent, EpisodicStore
+from cuttlefish.fleet.status import RoleStatus, role_statuses, roles_in
+from cuttlefish.projects.store import Project, ProjectStore, RoleDefinition
+from cuttlefish.steering import SteeringDeliveryError, cancel_run, send_steering_message
+from cuttlefish.team import RoleInput, TeamInput, run_team
+
+
+class FleetError(Exception):
+    """A fleet-daemon-level operation failed, distinctly from a workflow's own
+    failure (e.g. starting a project that already has a team running)."""
+
+
+class RoleStart(TypedDict):
+    """One role to start a team with: a name and its own fresh task text.
+
+    Mirrors ``cuttlefish.team.RoleInput`` exactly, kept as a separate type because a
+    daemon caller never supplies ``allow``/``secret_names`` (see ``FleetDaemon.start``
+    for why) -- this shape says so structurally.
+    """
+
+    name: str
+    text: str
+
+
+@dataclass(slots=True)
+class RunningTeam:
+    """One project's currently in-flight team -- everything `stop`/`steer` need to
+    reach it. `status` never reads this -- it reads the episodic journal directly,
+    so it keeps working even after the team (or the daemon itself) has stopped."""
+
+    team_id: str
+    base_url: str
+    token: str
+    task: asyncio.Task[None]
+
+
+def _compose_role_text(role_def: RoleDefinition | None, text: str) -> str:
+    """A role's task text, with its registered persona prefixed (Q31) -- an
+    unregistered role name runs with no persona prefix, a graceful default rather
+    than a rejected request (ADR-0009)."""
+    if role_def is None or not role_def.persona:
+        return text
+    return f"You are {role_def.name}. {role_def.persona}\n\n{text}"
+
+
+class FleetDaemon:
+    """Owns the `Project` registry and every currently-running team."""
+
+    def __init__(self, project_store: ProjectStore) -> None:
+        self._projects = project_store
+        self._running: dict[str, RunningTeam] = {}
+
+    @property
+    def projects(self) -> ProjectStore:
+        return self._projects
+
+    def running(self, project_id: str) -> RunningTeam | None:
+        """`None` once the team's task has finished -- a finished team's own final
+        state is read back from the episodic journal (`status`), not held here."""
+        running = self._running.get(project_id)
+        if running is not None and running.task.done():
+            del self._running[project_id]
+            return None
+        return running
+
+    def is_running(self, project_id: str) -> bool:
+        return self.running(project_id) is not None
+
+    async def start(self, project_id: str, roles: list[RoleStart]) -> str:
+        """Start `project_id`'s team with `roles`. Returns the new team id.
+
+        Every daemon-launched team is unconditionally steerable (ADR-0008's own
+        plumbing, reused as-is) -- the dashboard's whole point is a live chat panel
+        per role. A daemon-started team declares no project secrets beyond a
+        backend's own ambient credential names (`AgentBackend.CREDENTIAL_ENV_VARS`)
+        -- a project needing `--secret`-declared names still runs via the CLI
+        directly this slice, a real, named simplification, not an oversight.
+        """
+        project = self._projects.get(project_id)
+        if self.is_running(project_id):
+            raise FleetError(f"project {project_id!r} already has a running team")
+
+        team_id = uuid.uuid4().hex
+        role_inputs: list[RoleInput] = [
+            {
+                "name": role["name"],
+                "text": _compose_role_text(project.role(role["name"]), role["text"]),
+            }
+            for role in roles
+        ]
+
+        loop = asyncio.get_running_loop()
+        ready: asyncio.Future[tuple[str, str]] = loop.create_future()
+
+        async def _drive() -> None:
+            prepared: PreparedRun | None = None
+            try:
+                prepared = prepare_run(
+                    project=project.secrets_scope, secret_names=[], base_dir=Path(project.root)
+                )
+                runtime.configure(prepared.as_runtime())
+                workflow_input: TeamInput = {
+                    "team_id": team_id,
+                    "root": project.root,
+                    "project": project.secrets_scope,
+                    "roles": role_inputs,
+                    "steerable": True,
+                }
+                async with satay.control.run_app(data_dir=Path(project.root) / ".satay") as app:
+                    if not ready.done():
+                        ready.set_result((app.base_url, app.token))
+                    handle = satay.start(run_team, workflow_input, run_id=team_id, store=app.store)
+                    # The episodic journal already recorded why (Q16's posture) --
+                    # nothing further for the daemon to do with a failed team.
+                    with contextlib.suppress(satay.WorkflowFailedError):
+                        await handle.result()
+            except Exception as exc:
+                if not ready.done():
+                    # Nothing started -- report the failure through `ready` instead
+                    # of leaving it an unretrieved task exception (a second,
+                    # redundant warning for the identical failure).
+                    ready.set_exception(exc)
+                    return
+                raise
+            finally:
+                if prepared is not None:
+                    prepared.close()
+
+        task = asyncio.create_task(_drive())
+        try:
+            base_url, token = await ready
+        except Exception as exc:
+            raise FleetError(f"project {project_id!r} failed to start: {exc}") from exc
+
+        self._running[project_id] = RunningTeam(
+            team_id=team_id, base_url=base_url, token=token, task=task
+        )
+        self._projects.record_team_started(project_id, team_id)
+        return team_id
+
+    async def stop(self, project_id: str) -> None:
+        """`asyncio.to_thread` is load-bearing, not a style choice: `cancel_run` is a
+        blocking `urllib` call against a `satay.control.run_app` server running in
+        this *same* process, on this *same* event loop (the daemon drives every
+        team in-process, ADR-0009) -- calling it directly would block the loop that
+        the target server itself needs to answer the request, deadlocking against
+        itself exactly as `cuttlefish.steering.send_steering_message`'s own
+        docstring warns (`cuttlefish steer`, a separate short-lived CLI process,
+        never hits this because it never shares a loop with what it's calling)."""
+        running = self.running(project_id)
+        if running is None:
+            raise FleetError(f"project {project_id!r} has no running team")
+        try:
+            await asyncio.to_thread(
+                cancel_run, base_url=running.base_url, token=running.token, run_id=running.team_id
+            )
+        except SteeringDeliveryError as exc:
+            raise FleetError(str(exc)) from exc
+
+    async def steer(self, project_id: str, role: str, text: str) -> None:
+        """See `stop`'s own docstring -- `asyncio.to_thread` for the identical
+        same-loop-deadlock reason."""
+        running = self.running(project_id)
+        if running is None:
+            raise FleetError(f"project {project_id!r} has no running team to steer")
+        try:
+            await asyncio.to_thread(
+                send_steering_message,
+                base_url=running.base_url,
+                token=running.token,
+                task_id=running.team_id,
+                role=role,
+                text=text,
+            )
+        except SteeringDeliveryError as exc:
+            raise FleetError(str(exc)) from exc
+
+    def _last_team_events(self, project: Project) -> list[EpisodicEvent]:
+        """Every event of `project.last_team_id`, or `[]` if there isn't one yet or
+        its journal hasn't been created yet -- read-only, opening its own connection
+        (the store's own WAL mode makes this safe alongside the writer
+        `_drive` holds while a team is running)."""
+        if project.last_team_id is None:
+            return []
+        episodic_path = Path(project.root) / ".cuttlefish" / "episodic.db"
+        if not episodic_path.exists():
+            return []
+        store = EpisodicStore.open(episodic_path)
+        try:
+            return list(store.read(project.last_team_id))
+        finally:
+            store.close()
+
+    def status(self, project_id: str) -> dict[str, RoleStatus]:
+        project = self._projects.get(project_id)
+        role_names = [r.name for r in project.roles]
+        events = self._last_team_events(project)
+        if not events:
+            return dict.fromkeys(role_names, "queued")
+        names = role_names or sorted(roles_in(events))
+        return role_statuses(events, names)
+
+    def events(self, project_id: str) -> list[EpisodicEvent]:
+        """`project_id`'s last team's full episodic record, in order -- the same
+        journal `cuttlefish show` reads, for the dashboard's own event-tail view."""
+        project = self._projects.get(project_id)
+        return self._last_team_events(project)

@@ -82,3 +82,22 @@ jobs:
       - run: uv sync --frozen
       - name: pytest (integration only, real kopicode on PATH)
         run: uv run pytest tests/integration -q
+
+  frontend:
+    name: Dashboard frontend (svelte-check + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - name: svelte-check + tsc
+        run: npm run check
+        working-directory: frontend
+      - name: production build
+        run: npm run build
+        working-directory: frontend
