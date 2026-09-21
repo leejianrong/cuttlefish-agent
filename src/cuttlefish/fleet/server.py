@@ -14,6 +14,7 @@ task's own control API: it can steer *every* registered project at once.
 from __future__ import annotations
 
 import dataclasses
+import socket
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -189,6 +190,30 @@ def create_app(daemon: FleetDaemon, *, security: satay.control.SecurityPolicy) -
     return app
 
 
+def find_free_port(host: str, preferred: int, *, attempts: int = 20) -> int:
+    """The first free port at or after `preferred` on `host` -- a plain
+    `socket.bind` probe, pure stdlib (dev-playbook guidance: don't depend on
+    `lsof`/`nc` being installed just to avoid a port collision).
+
+    `cuttlefish serve` is meant to be a one-command entry point; on a personal
+    machine already running several projects side by side, a hardcoded default
+    port that just fails when it's taken is exactly the friction that guidance
+    warns against -- the fix is trying the next port automatically and printing
+    which one it actually landed on, not asking the operator to remember
+    `--port` every time. A probe-then-release check is inherently racy (another
+    process could grab the port in between) -- uvicorn's own bind is still what
+    actually decides; this only picks a good first guess.
+    """
+    for candidate in range(preferred, preferred + attempts):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            try:
+                probe.bind((host, candidate))
+            except OSError:
+                continue
+            return candidate
+    raise RuntimeError(f"no free port found in [{preferred}, {preferred + attempts}) on {host!r}")
+
+
 async def run_daemon(
     daemon: FleetDaemon, *, host: str = "127.0.0.1", port: int = DEFAULT_FLEET_PORT
 ) -> None:
@@ -198,13 +223,14 @@ async def run_daemon(
     the same posture `cuttlefish run --steerable` already holds for its own token.
     """
     satay.control.ensure_loopback_bind(host)
+    resolved_port = find_free_port(host, port)
     token = satay.control.generate_token()
     app = create_app(daemon, security=satay.control.SecurityPolicy(token=token))
     # flush=True: a long-running daemon's stdout is commonly redirected to a log
     # file rather than a TTY, where Python fully buffers by default -- an operator
     # piping this to a file must still be able to read the token immediately,
     # not only once enough further output accumulates to flush the buffer.
-    print(f"cuttlefish serve: http://{host}:{port}  {TOKEN_HEADER}: {token}", flush=True)
-    config = uvicorn.Config(app, host=host, port=port, log_level="warning")
+    print(f"cuttlefish serve: http://{host}:{resolved_port}  {TOKEN_HEADER}: {token}", flush=True)
+    config = uvicorn.Config(app, host=host, port=resolved_port, log_level="warning")
     server = uvicorn.Server(config)
     await server.serve()

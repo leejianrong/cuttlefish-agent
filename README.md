@@ -14,10 +14,13 @@ ordinary function wrapped in durability later. Everything that happens is
 written to one readable record, not scattered across logs that disagree
 with each other.
 
-> **Status**: pivoting from a single-task supervisor (V1/V2, complete) into
-> the fleet-manager direction above (slice A, the pluggable backend, is
-> complete too). See [`CLAUDE.md`](CLAUDE.md) for exactly what's shipped and
-> [`docs/PLAN.md`](docs/PLAN.md) for where this is headed.
+> **Status**: the fleet-manager pivot is well underway — pluggable agent
+> backends, project-scoped secrets, real team concurrency + steerable chat,
+> a formal `Project` entity, a fleet daemon (`cuttlefish serve`) that runs
+> every registered project's team concurrently, and a pixel-art dashboard
+> (`frontend/`, `make demo`) are all complete. See [`CLAUDE.md`](CLAUDE.md)
+> for exactly what's shipped and [`docs/PLAN.md`](docs/PLAN.md) for where
+> this is headed.
 
 ## How it works
 
@@ -49,6 +52,17 @@ default — checked before anything else (a missing one is a config error,
 not a mid-task failure), plus a real model credential for that backend.
 `CUTTLEFISH_LLM_PROVIDER=replay` swaps in a keyless, deterministic provider
 for smoke-testing the CLI itself with no live credential.
+
+### Try the dashboard
+
+```bash
+make demo
+```
+
+Starts a fleet daemon and the dashboard's dev server together, and prints
+the URL/token to paste into its connect screen. No daemon at hand yet? The
+connect screen links straight to a sprite gallery that needs no connection
+at all.
 
 ## Usage
 

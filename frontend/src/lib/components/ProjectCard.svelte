@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ProjectSummary } from "../api";
-  import StatusChip from "./StatusChip.svelte";
+  import RoleSprite from "./RoleSprite.svelte";
 
   let {
     project,
@@ -30,8 +30,8 @@
     <div class="roles">
       {#each roleEntries as [role, status] (role)}
         <div class="role-row">
+          <RoleSprite {status} size={2.5} />
           <span class="role-name">{role}</span>
-          <StatusChip {status} />
         </div>
       {/each}
     </div>
@@ -109,20 +109,24 @@
 
   .roles {
     display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-    margin: 0.2rem 0;
+    flex-wrap: wrap;
+    gap: 0.7rem 1rem;
+    margin: 0.3rem 0;
+    padding: 0.5rem 0.6rem;
+    background: var(--bg-inset);
+    border-radius: 8px;
   }
 
   .role-row {
     display: flex;
+    flex-direction: column;
     align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
+    gap: 0.3rem;
   }
 
   .role-name {
-    font-size: 0.85rem;
+    font-size: 0.7rem;
+    font-family: var(--font-mono);
     color: var(--text-muted);
   }
 

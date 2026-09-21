@@ -58,12 +58,18 @@ store), `cuttlefish/projects/` (the `Project` registry), and
 `cuttlefish/fleet/` (the daemon and its HTTP surface) — each module's own
 doc comment explains why it exists, not a list here. `cuttlefish/config.py`
 holds the config-resolution logic `cuttlefish.cli` and `cuttlefish.fleet`
-both share (ADR-0009's own factoring, extending ADR-0007's). Live-
-verification history and real bugs a live run found and fixed are in each
-PR's own description and `docs/QUESTIONS.md`, not repeated here.
+both share (ADR-0009's own factoring, extending ADR-0007's). Slice D2 (the
+pixel-art skin, ADR-0009) is also complete and merged — every role renders
+as a small animated pixel-art sprite (`frontend/src/lib/pixel/`), a plain
+CSS grid, no game-rendering library (Q51); `cuttlefish.fleet.server
+.find_free_port` makes `cuttlefish serve` auto-pick a free port instead of
+failing when its default is taken (Q52); `make demo`/`scripts/demo.sh` is
+the one-command way to run a daemon and the dashboard together locally
+(dev-playbook's own "runnable in one command" guidance). Live-verification
+history and real bugs a live run found and fixed are in each PR's own
+description and `docs/QUESTIONS.md`, not repeated here.
 
-Slice D2 (the pixel-art skin on D1's already-proven API) is next per the
-roadmap, not yet started.
+Slice E (runner/hosting) is next per the roadmap, not yet started.
 
 ## Known, accepted gaps — don't re-litigate
 
@@ -110,9 +116,14 @@ roadmap, not yet started.
   necessarily ends every team it owns. A project's status view still
   renders correctly afterward from its own episodic journal. ADR-0009's own
   Consequences section.
-- The dashboard (`frontend/`) is plain UI, not the pixel-art office view
-  the original vision sketched — that's slice D2, a rendering layer on top
-  of this exact same API, not started yet. `docs/SLICES.md`.
+- The dashboard's pixel art (`frontend/src/lib/pixel/`) is a hand-authored
+  CSS-grid sprite, not a canvas/game-engine renderer — revisit only if a
+  future slice genuinely needs many more simultaneously-animating sprites
+  than that shape can hold. `docs/QUESTIONS.md` Q51.
+- `OfficeScene` renders every role in one shared room per project; it does
+  not (yet) render a "zoomed-out, one giant map of every project" scene —
+  the portfolio view's own small-multiples cards are still the zoomed-out
+  layer, unchanged in shape since D1. `docs/SLICES.md` slice D2.
 
 ## Workflow conventions
 
@@ -120,9 +131,16 @@ roadmap, not yet started.
   off `origin/main`, then open a PR. `make ci` green before merging.
 - Commit trailer: `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>`.
 - `make check` (lint + `mypy --strict`), `make test` (fast, unit-only),
-  `make ci` (the full suite `make test-all` gates on). CI additionally
-  builds kopicode from source so the delegation's integration tests run
-  against the real binary, not a mock.
+  `make ci` (the full suite `make test-all`, plus `frontend-check`/
+  `frontend-test`/`frontend-build`, gates on). CI additionally builds
+  kopicode from source so the delegation's integration tests run against
+  the real binary, not a mock.
+- `make demo` (`scripts/demo.sh`) is the one-command way to actually run
+  this and try it — a fleet daemon plus the dashboard's dev server
+  together, printing the URL/token to paste in. Bare `make` always shows
+  `make help`, never runs a target by accident (dev-playbook's own
+  Makefile guidance) — keep any new target's `##` comment and this
+  ordering intact.
 
 ## Boundaries that must not be crossed
 

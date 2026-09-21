@@ -84,7 +84,7 @@ jobs:
         run: uv run pytest tests/integration -q
 
   frontend:
-    name: Dashboard frontend (svelte-check + build)
+    name: Dashboard frontend (svelte-check + vitest + build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -97,6 +97,9 @@ jobs:
         working-directory: frontend
       - name: svelte-check + tsc
         run: npm run check
+        working-directory: frontend
+      - name: vitest
+        run: npm run test
         working-directory: frontend
       - name: production build
         run: npm run build

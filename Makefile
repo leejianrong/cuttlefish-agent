@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
-.PHONY: help dev lint type check test test-all test-sandbox-live ci install-hooks \
-	frontend-install frontend-check frontend-build
+.PHONY: help dev demo lint type check test test-all test-sandbox-live ci install-hooks \
+	frontend-install frontend-check frontend-test frontend-build
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -8,6 +8,15 @@ help: ## Show available targets
 
 dev: ## Sync the dev environment (uv sync)
 	uv sync
+
+# The one-command way to actually see the dashboard running (slice D2,
+# dev-playbook's own "runnable in one command" guidance) -- starts a fleet
+# daemon and the dashboard's dev server together, prints the URL/token to paste
+# in, and stops both on Ctrl-C. Installs frontend/node_modules itself if it's
+# missing, so this is genuinely the first command a newcomer needs, not a second
+# step after remembering to `cd frontend && npm install` first.
+demo: ## Run a fleet daemon + dashboard together, print the URL/token to open
+	./scripts/demo.sh
 
 lint: ## Ruff lint + format check
 	uv run ruff check .
@@ -46,10 +55,13 @@ frontend-install: ## npm ci in frontend/
 frontend-check: ## svelte-check + tsc over frontend/ -- no build step
 	cd frontend && npm run check
 
+frontend-test: ## vitest over frontend/ -- pure-logic unit tests, no browser/DOM
+	cd frontend && npm run test
+
 frontend-build: ## Production build of frontend/ to frontend/dist/
 	cd frontend && npm run build
 
-ci: check test-all frontend-check frontend-build ## Everything CI gates on (lint + mypy + full suite + frontend)
+ci: check test-all frontend-check frontend-test frontend-build ## Everything CI gates on (lint + mypy + full suite + frontend)
 
 install-hooks: ## Install the pre-push git hook
 	./scripts/install-hooks.sh

@@ -1,7 +1,10 @@
 <script lang="ts">
   import { FleetClient, FleetApiError, FleetUnreachableError } from "../api";
 
-  let { onConnected }: { onConnected: (client: FleetClient) => void } = $props();
+  let {
+    onConnected,
+    onShowGallery,
+  }: { onConnected: (client: FleetClient) => void; onShowGallery: () => void } = $props();
 
   let baseUrl = $state("http://127.0.0.1:8420");
   let token = $state("");
@@ -54,6 +57,10 @@
 
     <button type="submit" disabled={connecting}>
       {connecting ? "Connecting…" : "Connect"}
+    </button>
+
+    <button type="button" class="gallery-link" onclick={onShowGallery}>
+      No daemon running yet? See the sprites first &rarr;
     </button>
   </form>
 </div>
@@ -134,5 +141,20 @@
     color: var(--danger);
     font-size: 0.85rem;
     margin: -0.4rem 0 1rem;
+  }
+
+  .gallery-link {
+    width: auto;
+    background: none;
+    color: var(--text-muted);
+    font-weight: 500;
+    font-size: 0.8rem;
+    padding: 0.6rem 0;
+    margin: 0 auto;
+    display: block;
+  }
+
+  .gallery-link:hover {
+    color: var(--accent);
   }
 </style>
