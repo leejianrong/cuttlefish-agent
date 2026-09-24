@@ -6,6 +6,15 @@ one summary via a single bounded LLM call, and writes the summary back as its ow
 episodic event (``HandoverWritten``) with a pointer into the full journal — nothing
 is dropped from the *record*, only from what a long-running task would otherwise
 keep piling into its own live context.
+
+Checked every round of a steered ``run_task``/``run_team`` loop, not only before it
+starts and after it ends (ADR-0010/KAN-1704 — the previous two-call-only shape meant
+this never actually fired *during* a long steered run, the one case it exists for).
+``latest_handover_summary`` is the read side: what ``cuttlefish.steering
+.compose_steered_text`` folds into a fresh round's prompt so the checkpoint this
+module computes actually reaches the agent's own next invocation, rather than
+staying a write-only journal entry only a human reading ``cuttlefish show`` ever
+sees.
 """
 
 from __future__ import annotations
@@ -129,6 +138,26 @@ async def maybe_handover(
         ),
     )
     return True
+
+
+async def latest_handover_summary(task_id: str, *, role: str | None = None) -> str | None:
+    """The most recent `HandoverWritten` summary for `task_id` (filtered to `role`,
+    ADR-0007 — the identical filter `maybe_handover` itself uses), or `None` if none
+    has fired yet.
+
+    What `compose_steered_text` (ADR-0010/KAN-1704) folds into a fresh round's
+    prompt in place of re-stating every raw round since the task began — before
+    this existed, `HandoverWritten` was written but never read back by anything,
+    so the checkpoint `maybe_handover` computes never actually reached the agent's
+    own next invocation.
+    """
+    raw_events = await read_episodic_events(task_id)
+    latest: str | None = None
+    for raw in raw_events:
+        payload = decode_payload(raw["event_type"], raw["data"])
+        if isinstance(payload, HandoverWritten) and payload.role == role:
+            latest = payload.summary
+    return latest
 
 
 def _build_summary_prompt(window: list[tuple[int, EventPayload]]) -> str:

@@ -44,16 +44,32 @@ def steering_key(task_id: str, role: str | None) -> str:
     return task_id if role is None else f"{task_id}:{role}"
 
 
-def compose_steered_text(original_text: str, round_summaries: list[str], steering_text: str) -> str:
+def compose_steered_text(
+    original_text: str,
+    round_summaries: list[str],
+    steering_text: str,
+    *,
+    handover_summary: str | None = None,
+) -> str:
     """The next round's task text.
 
     A fresh backend invocation has no memory of a prior round beyond whatever it
     already wrote to the checkout, so this is the only way it learns either what
     already happened or what the operator just asked for.
+
+    ``handover_summary`` (ADR-0010/KAN-1704) is the most recent
+    ``cuttlefish.handover.latest_handover_summary`` for this task/role, or `None`
+    if no handover has fired yet. ``round_summaries`` is only ever the raw rounds
+    *since* that checkpoint — a caller resets it whenever ``maybe_handover`` just
+    fired (``cuttlefish.workflow``/``cuttlefish.team`` both do) — so composed text
+    stays bounded across a long steered run instead of re-stating every round
+    since the task began, forever, on every single round.
     """
     lines = [original_text, ""]
+    if handover_summary is not None:
+        lines.append(f"Progress so far (checkpointed summary): {handover_summary}")
     for index, summary in enumerate(round_summaries, start=1):
-        lines.append(f"Round {index} of this task so far: {summary}")
+        lines.append(f"Round {index} since that checkpoint: {summary}")
     lines.append(f"The operator just sent this update -- take it into account: {steering_text}")
     return "\n".join(lines)
 

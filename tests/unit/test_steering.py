@@ -36,6 +36,25 @@ def test_compose_steered_text_includes_the_original_ask_prior_rounds_and_the_mes
     assert "actually try X" in text
 
 
+def test_compose_steered_text_omits_a_handover_line_when_none_has_fired() -> None:
+    text = compose_steered_text("add a .gitignore entry", [], "actually try X")
+    assert "checkpointed summary" not in text
+
+
+def test_compose_steered_text_includes_the_handover_summary_when_given_one() -> None:
+    """ADR-0010/KAN-1704: the checkpoint `maybe_handover` computes must actually
+    reach the next round's own prompt, not stay a write-only journal entry."""
+    text = compose_steered_text(
+        "add a .gitignore entry",
+        [],
+        "actually try X",
+        handover_summary="rounds 1-3: tried A, then B, both refused",
+    )
+    assert "rounds 1-3: tried A, then B, both refused" in text
+    assert "add a .gitignore entry" in text
+    assert "actually try X" in text
+
+
 def test_pointer_round_trips_through_write_read_remove(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
