@@ -7,7 +7,7 @@ import pytest
 from cuttlefish import runtime
 from cuttlefish.episodic.events import HandoverWritten, TaskSubmitted
 from cuttlefish.episodic.store import EpisodicStore
-from cuttlefish.handover import maybe_handover
+from cuttlefish.handover import latest_handover_summary, maybe_handover
 from cuttlefish.llm.provider import LlmResponse
 from cuttlefish.llm.replay import ReplayLlmProvider
 
@@ -137,4 +137,47 @@ async def test_role_none_stays_the_plain_single_task_behaviour(tmp_path: Path) -
     fired = await maybe_handover("task-1", token_budget=50)
 
     assert fired is False
+    store.close()
+
+
+# -- latest_handover_summary (ADR-0010/KAN-1704) --------------------------------
+
+
+async def test_latest_handover_summary_is_none_before_any_handover_fires(tmp_path: Path) -> None:
+    store = _configure(tmp_path)
+    store.append("task-1", TaskSubmitted(text="a short task"))
+
+    assert await latest_handover_summary("task-1") is None
+    store.close()
+
+
+async def test_latest_handover_summary_returns_the_most_recent_one(tmp_path: Path) -> None:
+    store = _configure(
+        tmp_path,
+        LlmResponse(model="replay", text="first summary"),
+        LlmResponse(model="replay", text="second summary"),
+    )
+    store.append("task-1", TaskSubmitted(text="x" * 400))
+    assert await maybe_handover("task-1", token_budget=50) is True
+    assert await latest_handover_summary("task-1") == "first summary"
+
+    store.append("task-1", TaskSubmitted(text="y" * 400))
+    assert await maybe_handover("task-1", token_budget=50) is True
+    assert await latest_handover_summary("task-1") == "second summary"
+    store.close()
+
+
+async def test_latest_handover_summary_is_role_scoped(tmp_path: Path) -> None:
+    """The identical role filter `maybe_handover` itself uses (ADR-0007) -- a
+    caller reading back one role's own checkpoint must never see another role's."""
+    store = _configure(
+        tmp_path,
+        LlmResponse(model="replay", text="builder summary"),
+    )
+    store.append("team-1", TaskSubmitted(text="x" * 4000, role="builder"))
+    assert await maybe_handover("team-1", token_budget=50, role="builder") is True
+
+    assert await latest_handover_summary("team-1", role="builder") == "builder summary"
+    assert await latest_handover_summary("team-1", role="reviewer") is None
+    assert await latest_handover_summary("team-1") is None  # role=None is its own lane too
     store.close()

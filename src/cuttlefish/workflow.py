@@ -27,7 +27,7 @@ from cuttlefish.episodic.events import (
     TaskFailed,
     TaskSubmitted,
 )
-from cuttlefish.handover import DEFAULT_TOKEN_BUDGET, maybe_handover
+from cuttlefish.handover import DEFAULT_TOKEN_BUDGET, latest_handover_summary, maybe_handover
 from cuttlefish.secrets.store import DEFAULT_PROJECT
 from cuttlefish.steering import DEFAULT_STEERING_GRACE_SECONDS, compose_steered_text, steering_key
 from cuttlefish.tasks.delegate import delegate_to_agent_backend
@@ -153,6 +153,15 @@ async def run_task(task_input: TaskInput) -> dict[str, Any]:
         else:
             await journal(task_id, DelegationFailed(reason=outcome.reason or outcome.summary))
 
+        # ADR-0010/KAN-1704: checked every round, not only before the loop starts
+        # and after it ends -- a long steered run is exactly the case a mid-loop
+        # checkpoint exists for (ADR-0004), and it previously never fired there at
+        # all. A fresh handover already covers this round's own outcome (just
+        # journaled above), so `round_summaries` -- the *un*-checkpointed rounds --
+        # resets rather than restating it again next round.
+        if await maybe_handover(task_id, token_budget=token_budget):
+            round_summaries.clear()
+
         if not steerable:
             break
 
@@ -168,7 +177,10 @@ async def run_task(task_input: TaskInput) -> dict[str, Any]:
         round_summaries.append(
             outcome.summary if outcome.kind == "completed" else (outcome.reason or outcome.summary)
         )
-        current_text = compose_steered_text(text, round_summaries, steer_event.text)
+        handover_summary = await latest_handover_summary(task_id)
+        current_text = compose_steered_text(
+            text, round_summaries, steer_event.text, handover_summary=handover_summary
+        )
 
     await maybe_handover(task_id, token_budget=token_budget)
 

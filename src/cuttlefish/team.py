@@ -39,7 +39,7 @@ from cuttlefish.episodic.events import (
     TaskFailed,
     TaskSubmitted,
 )
-from cuttlefish.handover import DEFAULT_TOKEN_BUDGET, maybe_handover
+from cuttlefish.handover import DEFAULT_TOKEN_BUDGET, latest_handover_summary, maybe_handover
 from cuttlefish.secrets.store import DEFAULT_PROJECT
 from cuttlefish.steering import DEFAULT_STEERING_GRACE_SECONDS, compose_steered_text, steering_key
 from cuttlefish.tasks.delegate import delegate_to_agent_backend
@@ -247,6 +247,11 @@ async def run_team(team_input: TeamInput) -> dict[str, Any]:
                 )
             final_outcome[name] = outcome
 
+            # ADR-0010/KAN-1704: checked every round, per role, not only at a
+            # role's own start and end -- see run_task's identical fix for why.
+            if await maybe_handover(team_id, token_budget=token_budget, role=name):
+                round_summaries[name].clear()
+
             if not steerable:
                 continue
 
@@ -265,8 +270,12 @@ async def run_team(team_input: TeamInput) -> dict[str, Any]:
                 else (outcome.reason or outcome.summary)
             )
             round_summaries[name].append(summary)
+            handover_summary = await latest_handover_summary(team_id, role=name)
             current_text[name] = compose_steered_text(
-                role_by_name[name]["text"], round_summaries[name], steer_event.text
+                role_by_name[name]["text"],
+                round_summaries[name],
+                steer_event.text,
+                handover_summary=handover_summary,
             )
             del final_outcome[name]
             next_active.append(name)
