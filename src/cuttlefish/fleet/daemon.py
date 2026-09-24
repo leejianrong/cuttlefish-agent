@@ -5,6 +5,13 @@ One `asyncio.create_task` per project, each its own `satay.control.run_app` poin
 at that project's own `<root>/.satay` -- never a subprocess (`docs/QUESTIONS.md`
 Q48/Q50). Status reads go straight to that project's own `.cuttlefish/episodic.db`
 (`cuttlefish.fleet.status`), never satay's own live worker state.
+
+`resume_pending` (ADR-0010/KAN-1703) closes ADR-0009's own named daemon-restart
+gap: it re-drives every project's last, still-non-terminal team through the
+identical `satay.start(run_team, ..., run_id=<the same team_id>)` call satay's
+own `RunController.result()` already resumes correctly (proven directly by
+`tests/integration/test_crash_recovery.py`, unchanged here) -- cuttlefish was
+simply never calling it that way before this fix.
 """
 
 from __future__ import annotations
@@ -18,12 +25,15 @@ from typing import TypedDict
 
 import satay
 import satay.control
+from satay.config import db_path as satay_db_path
+from satay.journal.events import TERMINAL_STATUSES
+from satay.journal.store import SQLiteStore
 
 from cuttlefish import runtime
 from cuttlefish.config import PreparedRun, prepare_run
 from cuttlefish.episodic.store import EpisodicEvent, EpisodicStore
 from cuttlefish.fleet.status import RoleStatus, role_statuses, roles_in
-from cuttlefish.projects.store import Project, ProjectStore, RoleDefinition
+from cuttlefish.projects.store import PersistedRole, Project, ProjectStore, RoleDefinition
 from cuttlefish.steering import SteeringDeliveryError, cancel_run, send_steering_message
 from cuttlefish.team import RoleInput, TeamInput, run_team
 
@@ -84,6 +94,42 @@ def _build_role_inputs(project: Project, roles: list[RoleStart]) -> list[RoleInp
     ]
 
 
+def _to_persisted_roles(role_inputs: list[RoleInput]) -> tuple[PersistedRole, ...]:
+    """`role_inputs` (already persona-composed) as the durable checkpoint
+    `ProjectStore.record_team_started` writes -- what `resume_pending` reads
+    back verbatim after a restart, so a role's persona is never re-applied a
+    second time on resume (`_persisted_roles_to_inputs` does not call
+    `_compose_role_text` again)."""
+    return tuple(
+        PersistedRole(
+            name=role["name"],
+            text=role["text"],
+            allow=tuple(tuple(command) for command in role.get("allow", [])),
+        )
+        for role in role_inputs
+    )
+
+
+def _persisted_roles_to_inputs(roles: tuple[PersistedRole, ...]) -> list[RoleInput]:
+    return [
+        {"name": role.name, "text": role.text, "allow": [list(command) for command in role.allow]}
+        for role in roles
+    ]
+
+
+@dataclass(slots=True, frozen=True)
+class ResumeAttempt:
+    """One project's own `resume_pending` outcome -- `error` is `None` on success,
+    so a caller (`cuttlefish serve`) can print a clear line per project either way
+    instead of a resume failure silently leaving that project looking merely
+    unstarted."""
+
+    project_id: str
+    project_name: str
+    team_id: str
+    error: str | None
+
+
 class FleetDaemon:
     """Owns the `Project` registry and every currently-running team."""
 
@@ -123,7 +169,20 @@ class FleetDaemon:
 
         team_id = uuid.uuid4().hex
         role_inputs = _build_role_inputs(project, roles)
+        await self._launch_team(project, team_id, role_inputs)
+        self._projects.record_team_started(project_id, team_id, _to_persisted_roles(role_inputs))
+        return team_id
 
+    async def _launch_team(
+        self, project: Project, team_id: str, role_inputs: list[RoleInput]
+    ) -> None:
+        """Drive `run_team` for `project` under `team_id`/`role_inputs`, shared by
+        `start` (a fresh `team_id`, never seen by satay before) and `resume_pending`
+        (an existing, persisted `team_id`/`role_inputs`) -- `satay.start` itself
+        resolves create-vs-resume purely from whether that `run_id`'s row already
+        exists in `project`'s own `.satay` store (ADR-0010), so this method doesn't
+        need to know or care which case it's in.
+        """
         loop = asyncio.get_running_loop()
         ready: asyncio.Future[tuple[str, str]] = loop.create_future()
 
@@ -165,13 +224,62 @@ class FleetDaemon:
         try:
             base_url, token = await ready
         except Exception as exc:
-            raise FleetError(f"project {project_id!r} failed to start: {exc}") from exc
+            raise FleetError(f"project {project.id!r} failed to start: {exc}") from exc
 
-        self._running[project_id] = RunningTeam(
+        self._running[project.id] = RunningTeam(
             team_id=team_id, base_url=base_url, token=token, task=task
         )
-        self._projects.record_team_started(project_id, team_id)
-        return team_id
+
+    async def _is_resumable(self, project: Project, team_id: str) -> bool:
+        """Whether `team_id`'s satay run is still non-terminal -- a plain, read-only
+        open of `project`'s own `.satay/satay.db` (WAL mode makes this safe even
+        while a *different* project's own writer is live, the same posture
+        `_last_team_events` already holds for the episodic store). `False` for a
+        project that never actually reached satay (no `.satay` yet), not an error."""
+        database = satay_db_path(Path(project.root) / ".satay")
+        if not database.exists():
+            return False
+        store = SQLiteStore.open(database)
+        try:
+            record = await store.get_run(team_id)
+        finally:
+            store.close()
+        return record is not None and record.status not in TERMINAL_STATUSES
+
+    async def resume_pending(self) -> list[ResumeAttempt]:
+        """Resume every registered project's last team that was still running when
+        the daemon (or its host process) died -- ADR-0009's own named daemon-restart
+        gap, closed here per ADR-0010: re-drive `run_team` with the *same*
+        `team_id`/`role_inputs` its last start used, which satay's own
+        `RunController.result()` already resumes correctly (it's the identical
+        `satay.start(..., run_id=)` call `start` makes for a brand-new team --
+        satay itself decides create-vs-resume from whether that id's row already
+        exists). Call once, at `cuttlefish serve` startup, before the HTTP surface
+        opens.
+
+        A project with no persisted `last_team_roles` (registered but never
+        started, or started before this fix shipped) is skipped -- there is no
+        durable record of the `TeamInput` its last run actually used, and passing a
+        *different* one would risk satay's own strict `nondeterminism` policy
+        rejecting the resume rather than silently corrupting it. A project whose
+        last team already reached a terminal state is skipped too -- nothing to
+        resume.
+        """
+        attempts: list[ResumeAttempt] = []
+        for project in self._projects.list():
+            team_id = project.last_team_id
+            if team_id is None or not project.last_team_roles or self.is_running(project.id):
+                continue
+            if not await self._is_resumable(project, team_id):
+                continue
+            role_inputs = _persisted_roles_to_inputs(project.last_team_roles)
+            try:
+                await self._launch_team(project, team_id, role_inputs)
+            except FleetError as exc:
+                attempts.append(ResumeAttempt(project.id, project.name, team_id, error=str(exc)))
+                continue
+            attempts.append(ResumeAttempt(project.id, project.name, team_id, error=None))
+        return attempts
 
     async def stop(self, project_id: str) -> None:
         """`asyncio.to_thread` is load-bearing, not a style choice: `cancel_run` is a

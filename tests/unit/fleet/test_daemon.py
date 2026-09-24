@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from cuttlefish.fleet.daemon import FleetDaemon, FleetError, RunningTeam, _build_role_inputs
-from cuttlefish.projects.store import ProjectStore, RoleDefinition
+from cuttlefish.projects.store import PersistedRole, ProjectStore, RoleDefinition
 
 
 def _daemon(tmp_path: Path) -> FleetDaemon:
@@ -86,3 +86,57 @@ async def test_running_forgets_a_task_once_it_finishes(tmp_path: Path) -> None:
 
     assert daemon.running(project.id) is None
     assert daemon.is_running(project.id) is False
+
+
+# -- resume_pending (ADR-0010/KAN-1703) -----------------------------------------
+#
+# These cover resume_pending's own skip conditions, none of which need a real
+# satay run or kopicode -- see tests/integration/test_fleet_resume.py for the
+# end-to-end "a crashed team actually gets driven to a terminal state again"
+# proof, which does.
+
+
+async def test_resume_pending_skips_a_project_that_never_started_a_team(tmp_path: Path) -> None:
+    daemon = _daemon(tmp_path)
+    daemon.projects.register(name="alpha", root=str(tmp_path / "alpha"))
+    assert await daemon.resume_pending() == []
+
+
+async def test_resume_pending_skips_a_project_with_no_persisted_roles(tmp_path: Path) -> None:
+    """A project whose `last_team_id` predates this fix (or was started by a
+    plain `cuttlefish run-team`, which never persists roles at all) has no
+    durable record of the `TeamInput` its last run used -- skipped, not resumed
+    with a guessed-at input."""
+    daemon = _daemon(tmp_path)
+    project = daemon.projects.register(name="alpha", root=str(tmp_path / "alpha"))
+    daemon.projects.record_team_started(project.id, "orphaned-team")  # roles default to ()
+    assert await daemon.resume_pending() == []
+
+
+async def test_resume_pending_skips_a_project_with_no_satay_data_dir_yet(tmp_path: Path) -> None:
+    """`last_team_id`/`last_team_roles` persisted, but `<root>/.satay` was never
+    actually created (e.g. the process died before `satay.control.run_app` ever
+    opened) -- nothing to resume, not an error."""
+    daemon = _daemon(tmp_path)
+    root = tmp_path / "alpha"
+    root.mkdir()
+    project = daemon.projects.register(name="alpha", root=str(root))
+    daemon.projects.record_team_started(
+        project.id, "phantom-team", (PersistedRole(name="builder", text="do it"),)
+    )
+    assert await daemon.resume_pending() == []
+
+
+async def test_resume_pending_skips_a_project_already_running(tmp_path: Path) -> None:
+    daemon = _daemon(tmp_path)
+    root = tmp_path / "alpha"
+    root.mkdir()
+    project = daemon.projects.register(name="alpha", root=str(root))
+    daemon.projects.record_team_started(
+        project.id, "already-running-team", (PersistedRole(name="builder", text="do it"),)
+    )
+    task = await _inject_running(daemon, project.id)
+
+    assert await daemon.resume_pending() == []
+
+    task.cancel()

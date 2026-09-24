@@ -379,6 +379,22 @@ async def _serve(args: argparse.Namespace) -> int:
     store = ProjectStore.open()
     daemon = FleetDaemon(store)
     try:
+        # ADR-0010/KAN-1703: resume every project whose last team was still
+        # running when this process (or a prior `cuttlefish serve`) died, before
+        # the HTTP surface opens -- an operator steering a resumed team should
+        # never race a `start` request against a resume still in flight.
+        for attempt in await daemon.resume_pending():
+            if attempt.error is None:
+                print(
+                    f"cuttlefish serve: resumed {attempt.project_name!r} (team {attempt.team_id})",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"cuttlefish serve: failed to resume {attempt.project_name!r} "
+                    f"(team {attempt.team_id}): {attempt.error}",
+                    file=sys.stderr,
+                )
         await run_daemon(daemon, host=args.host, port=args.port)
     finally:
         store.close()

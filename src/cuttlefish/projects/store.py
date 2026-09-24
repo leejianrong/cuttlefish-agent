@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -41,7 +42,8 @@ CREATE TABLE IF NOT EXISTS projects (
     secrets_scope TEXT NOT NULL,
     roles_json TEXT NOT NULL,
     last_team_id TEXT,
-    allow_json TEXT NOT NULL DEFAULT '[]'
+    allow_json TEXT NOT NULL DEFAULT '[]',
+    last_team_roles_json TEXT NOT NULL DEFAULT '[]'
 )
 """
 
@@ -51,6 +53,17 @@ CREATE TABLE IF NOT EXISTS projects (
 #: this once, guarded by `PRAGMA table_info`, so a fresh database (which already
 #: has the column from `_CREATE_TABLE`) is a harmless no-op.
 _ADD_ALLOW_COLUMN = "ALTER TABLE projects ADD COLUMN allow_json TEXT NOT NULL DEFAULT '[]'"
+
+#: `last_team_roles_json` was added for KAN-1703/ADR-0010 -- a daemon restart can
+#: only resume `last_team_id` if it can rebuild the *identical* `TeamInput` that
+#: run started with (satay's own resume primitive drives on whatever
+#: `workflow_input` this call passes, not something it rehydrates from the
+#: journal itself); persisting each role's already-composed text/allow at start
+#: time is the only durable place that input can come from after a restart.
+#: Migrated the same way `allow_json` was.
+_ADD_LAST_TEAM_ROLES_COLUMN = (
+    "ALTER TABLE projects ADD COLUMN last_team_roles_json TEXT NOT NULL DEFAULT '[]'"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +75,22 @@ class RoleDefinition:
 
     name: str
     persona: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class PersistedRole:
+    """One role's task text and policy exactly as composed when `last_team_id`
+    last started (ADR-0010/KAN-1703) — durable only so a daemon restart can
+    resume that run with the identical `TeamInput` satay's own resume-by-run_id
+    primitive needs, never surfaced as a project's own reusable role definition.
+    `RoleDefinition` above stays the persona-only, task-text-free durable role;
+    ADR-0009's own reasoning for why task text is ephemeral is unchanged — this
+    is a resume checkpoint, not a second place task text lives on purpose.
+    """
+
+    name: str
+    text: str
+    allow: tuple[tuple[str, ...], ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +116,7 @@ class Project:
     roles: tuple[RoleDefinition, ...] = field(default_factory=tuple)
     last_team_id: str | None = None
     allow: tuple[tuple[str, ...], ...] = field(default_factory=tuple)
+    last_team_roles: tuple[PersistedRole, ...] = field(default_factory=tuple)
 
     def role(self, name: str) -> RoleDefinition | None:
         """The registered role definition named `name`, or `None` if this project
@@ -120,6 +150,23 @@ def _decode_allow(raw: str) -> tuple[tuple[str, ...], ...]:
     return tuple(tuple(command) for command in json.loads(raw))
 
 
+def _encode_persisted_roles(roles: tuple[PersistedRole, ...]) -> str:
+    return json.dumps(
+        [{"name": r.name, "text": r.text, "allow": [list(c) for c in r.allow]} for r in roles]
+    )
+
+
+def _decode_persisted_roles(raw: str) -> tuple[PersistedRole, ...]:
+    return tuple(
+        PersistedRole(
+            name=r["name"],
+            text=r["text"],
+            allow=tuple(tuple(c) for c in r.get("allow", [])),
+        )
+        for r in json.loads(raw)
+    )
+
+
 def _row_to_project(row: sqlite3.Row) -> Project:
     return Project(
         id=row["id"],
@@ -129,6 +176,7 @@ def _row_to_project(row: sqlite3.Row) -> Project:
         roles=_decode_roles(row["roles_json"]),
         last_team_id=row["last_team_id"],
         allow=_decode_allow(row["allow_json"]),
+        last_team_roles=_decode_persisted_roles(row["last_team_roles_json"]),
     )
 
 
@@ -142,6 +190,8 @@ class ProjectStore:
         columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(projects)")}
         if "allow_json" not in columns:
             self._conn.execute(_ADD_ALLOW_COLUMN)
+        if "last_team_roles_json" not in columns:
+            self._conn.execute(_ADD_LAST_TEAM_ROLES_COLUMN)
         self._conn.commit()
 
     @classmethod
@@ -186,8 +236,9 @@ class ProjectStore:
         )
         self._conn.execute(
             "INSERT INTO projects "
-            "(id, name, root, secrets_scope, roles_json, last_team_id, allow_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(id, name, root, secrets_scope, roles_json, last_team_id, allow_json, "
+            "last_team_roles_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 project.id,
                 project.name,
@@ -196,6 +247,7 @@ class ProjectStore:
                 _encode_roles(project.roles),
                 project.last_team_id,
                 _encode_allow(project.allow),
+                _encode_persisted_roles(project.last_team_roles),
             ),
         )
         self._conn.commit()
@@ -227,10 +279,17 @@ class ProjectStore:
         self._conn.commit()
         return self.get(project_id)
 
-    def record_team_started(self, project_id: str, team_id: str) -> None:
+    def record_team_started(
+        self, project_id: str, team_id: str, roles: Sequence[PersistedRole] = ()
+    ) -> None:
+        """`roles` defaults to `()` for a caller with nothing to persist (e.g. a
+        plain CLI-driven team, which has no daemon restart to survive) — a project
+        started that way just isn't resumable later (`FleetDaemon.resume_pending`
+        skips any project with no persisted `last_team_roles`, ADR-0010)."""
         self.get(project_id)  # raises ProjectNotFoundError if unknown
         self._conn.execute(
-            "UPDATE projects SET last_team_id = ? WHERE id = ?", (team_id, project_id)
+            "UPDATE projects SET last_team_id = ?, last_team_roles_json = ? WHERE id = ?",
+            (team_id, _encode_persisted_roles(tuple(roles)), project_id),
         )
         self._conn.commit()
 
