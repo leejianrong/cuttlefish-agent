@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections.abc import Iterable, Mapping
 from typing import Any
 
 from cuttlefish.agents.outcome import DelegationError, DelegationOutcome
 from cuttlefish.delegate.subprocess_env import merge_env
+from cuttlefish.episodic.redact import DEFAULT_SECRET_ENV_VARS, Redactor
 from cuttlefish.sandbox.provider import SandboxError, SandboxHandle, SandboxProvider
 
 #: kopicode run --print's per-line `kind` values this module reads. Every other kind
@@ -45,7 +47,9 @@ _EXIT_CODE_SUCCESS = 0
 _WHOLE_FILE_WRITE_TOOLS = frozenset({"write_file", "delete_file"})
 
 
-def classify_stream(events: Iterable[Mapping[str, Any]]) -> DelegationOutcome:
+def classify_stream(
+    events: Iterable[Mapping[str, Any]], *, stderr_tail: str = ""
+) -> DelegationOutcome:
     """Reduce an already-parsed sequence of `run --print` event lines to one outcome.
 
     Pure and synchronous — the subprocess and its NDJSON parsing live in
@@ -55,6 +59,13 @@ def classify_stream(events: Iterable[Mapping[str, Any]]) -> DelegationOutcome:
     stream stays integration-tested against the real binary (docs/SLICES.md V1 test
     plan) — this function doesn't invent kopicode's vocabulary, it only decides what
     a given sequence of it means.
+
+    `stderr_tail` is folded into a ``"failed"`` outcome's `reason` — kopicode's own
+    `session_ended` event carries only `exit_code`/`reason`, which is often too
+    generic to act on (e.g. a provider's 401 shows up only on stderr, never in the
+    event stream itself). The caller (:func:`classify_kopicode_output`) is
+    responsible for already having redacted and truncated it — this function just
+    threads a plain string through.
     """
     edited_paths: list[str] = []
     deny_reasons: list[str] = []
@@ -112,10 +123,13 @@ def classify_stream(events: Iterable[Mapping[str, Any]]) -> DelegationOutcome:
             kind="completed",
             summary=f"kopicode finished with no edit needed ({stop_reason})",
         )
+    reason = f"exit_code={exit_code} reason={stop_reason}"
+    if stderr_tail:
+        reason += f"; stderr: {stderr_tail}"
     return DelegationOutcome(
         kind="failed",
         summary=f"kopicode did not finish cleanly ({stop_reason})",
-        reason=f"exit_code={exit_code} reason={stop_reason}",
+        reason=reason,
     )
 
 
@@ -182,6 +196,7 @@ async def run_kopicode(
         stdout_bytes.decode("utf-8", errors="replace"),
         stderr_bytes.decode("utf-8", errors="replace"),
         returncode=process.returncode,
+        env=env,
     )
 
 
@@ -213,13 +228,23 @@ async def run_kopicode_in_sandbox(
 
 
 def classify_kopicode_output(
-    stdout_text: str, stderr_text: str, *, returncode: int | None
+    stdout_text: str,
+    stderr_text: str,
+    *,
+    returncode: int | None,
+    env: Mapping[str, str] | None = None,
 ) -> DelegationOutcome:
     """Classify one already-captured ``run --print`` stdout/stderr pair.
 
     Shared by both invocation paths (a direct host subprocess, or a sandboxed
     ``exec``) so parsing and classification never diverge between them — only how
     the raw output was obtained differs.
+
+    `env` is the same credential mapping the invocation itself carried (e.g.
+    `run_kopicode`'s own `env` argument) — used only to redact a failed session's
+    stderr tail before it becomes part of `DelegationOutcome.reason` (see
+    :func:`_redacted_stderr_tail`); `None` still redacts against the same ambient
+    names the episodic journal's own write-time redactor knows (ADR-0004).
     """
     events = parse_ndjson(stdout_text)
     if not events:
@@ -227,7 +252,39 @@ def classify_kopicode_output(
             f"kopicode produced no session events (exit {returncode}); "
             f"stderr: {stderr_text.strip() or '<empty>'}"
         )
-    return classify_stream(events)
+    return classify_stream(events, stderr_tail=_redacted_stderr_tail(stderr_text, env))
+
+
+#: How much of a failed session's stderr to surface in `DelegationOutcome.reason` --
+#: enough for a human to see e.g. "API key expired" without folding an unbounded
+#: log into a value that (unlike a caught exception's message) becomes a task's
+#: own return value before the episodic journal ever gets a chance to redact it.
+_STDERR_TAIL_CHARS = 2000
+
+
+def _redacted_stderr_tail(stderr_text: str, env: Mapping[str, str] | None) -> str:
+    """The last `_STDERR_TAIL_CHARS` of `stderr_text`, with every credential this
+    invocation carried replaced first.
+
+    kopicode's own stderr can in principle echo a secret verbatim -- a provider's
+    own error response, say -- and this string is threaded straight into
+    `DelegationOutcome.reason`, a satay task return value, before the episodic
+    journal's own write-time redaction (`cuttlefish.episodic.redact`) ever sees it
+    (ADR-0004, CLAUDE.md's "redacted from the episodic journal at write time" rule).
+    Redacted here defensively, the same way and against the same known-secret names
+    (`DEFAULT_SECRET_ENV_VARS` plus whatever this call's own `env` carried), rather
+    than trusting that later write-time pass alone.
+    """
+    stripped = stderr_text.strip()
+    if not stripped:
+        return ""
+    names = sorted(set(DEFAULT_SECRET_ENV_VARS) | set(env or {}))
+
+    def _lookup(name: str) -> str | None:
+        return (env or {}).get(name) or os.environ.get(name)
+
+    redacted, _ = Redactor(names, lookup=_lookup).scrub(stripped)
+    return redacted[-_STDERR_TAIL_CHARS:]
 
 
 def _path_from_tool_detail(detail: object) -> str | None:
