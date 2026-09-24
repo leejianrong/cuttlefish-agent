@@ -71,6 +71,23 @@ def _allow_from_body(body: dict[str, Any]) -> tuple[tuple[str, ...], ...]:
     return tuple(tuple(command) for command in body.get("allow", []))
 
 
+async def _json_body(request: Request) -> dict[str, Any]:
+    """`request`'s JSON body, or a clean 400 -- never the raw `JSONDecodeError`
+    FastAPI would otherwise turn into an unhandled 500 (reproduced live: a bare
+    ``curl -X POST .../start`` with no body at all). Every handler below already
+    validates its own parsed fields with an explicit `HTTPException(400, ...)`;
+    a missing or malformed body is just an earlier instance of the same bad-input
+    case, not a server error.
+    """
+    try:
+        body = await request.json()
+    except ValueError as exc:
+        raise HTTPException(400, f"request body must be valid JSON: {exc}") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(400, "request body must be a JSON object")
+    return body
+
+
 def create_app(daemon: FleetDaemon, *, security: satay.control.SecurityPolicy) -> FastAPI:
     app = FastAPI(title="cuttlefish-crew fleet daemon")
 
@@ -111,7 +128,7 @@ def create_app(daemon: FleetDaemon, *, security: satay.control.SecurityPolicy) -
 
     @app.post("/api/projects", status_code=201)
     async def register_project(request: Request) -> dict[str, Any]:
-        body = await request.json()
+        body = await _json_body(request)
         name, root = body.get("name"), body.get("root")
         if not name or not root:
             raise HTTPException(400, "'name' and 'root' are required")
@@ -141,7 +158,7 @@ def create_app(daemon: FleetDaemon, *, security: satay.control.SecurityPolicy) -
 
     @app.patch("/api/projects/{project_id}/roles")
     async def update_roles(project_id: str, request: Request) -> dict[str, Any]:
-        body = await request.json()
+        body = await _json_body(request)
         try:
             daemon.projects.update_roles(project_id, _roles_from_body(body))
             return _project_json(daemon, project_id)
@@ -150,7 +167,7 @@ def create_app(daemon: FleetDaemon, *, security: satay.control.SecurityPolicy) -
 
     @app.patch("/api/projects/{project_id}/allow")
     async def update_allow(project_id: str, request: Request) -> dict[str, Any]:
-        body = await request.json()
+        body = await _json_body(request)
         try:
             daemon.projects.update_allow(project_id, _allow_from_body(body))
             return _project_json(daemon, project_id)
@@ -164,7 +181,7 @@ def create_app(daemon: FleetDaemon, *, security: satay.control.SecurityPolicy) -
 
     @app.post("/api/projects/{project_id}/start")
     async def start_project(project_id: str, request: Request) -> dict[str, Any]:
-        body = await request.json()
+        body = await _json_body(request)
         roles: list[RoleStart] = [
             {"name": r["name"], "text": r["text"]} for r in body.get("roles", [])
         ]
@@ -190,7 +207,7 @@ def create_app(daemon: FleetDaemon, *, security: satay.control.SecurityPolicy) -
 
     @app.post("/api/projects/{project_id}/steer")
     async def steer_project(project_id: str, request: Request) -> dict[str, Any]:
-        body = await request.json()
+        body = await _json_body(request)
         role, text = body.get("role"), body.get("text")
         if not role or not text:
             raise HTTPException(400, "'role' and 'text' are required")

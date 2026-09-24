@@ -185,3 +185,62 @@ def test_start_with_no_roles_is_400(client: TestClient, tmp_path: Path) -> None:
 
     response = client.post(f"/api/projects/{project_id}/start", json={"roles": []})
     assert response.status_code == 400
+
+
+def test_register_with_no_body_is_400_not_500(client: TestClient) -> None:
+    # A bare `curl -X POST .../projects` with no body at all -- reproduced live,
+    # this used to raise an unhandled JSONDecodeError (a raw 500).
+    response = client.post("/api/projects", content=b"")
+    assert response.status_code == 400
+
+
+def test_register_with_malformed_json_is_400_not_500(client: TestClient) -> None:
+    response = client.post("/api/projects", content=b"{not json")
+    assert response.status_code == 400
+
+
+def test_register_with_a_json_array_body_is_400_not_500(client: TestClient) -> None:
+    # Valid JSON, but not an object -- `body.get(...)` would otherwise raise
+    # AttributeError instead of the intended "missing 'name'/'root'" 400.
+    response = client.post("/api/projects", content=b"[1, 2, 3]")
+    assert response.status_code == 400
+
+
+def test_start_with_no_body_is_400_not_500(client: TestClient, tmp_path: Path) -> None:
+    created = client.post("/api/projects", json={"name": "demo", "root": str(tmp_path / "demo")})
+    project_id = created.json()["id"]
+
+    response = client.post(f"/api/projects/{project_id}/start", content=b"")
+    assert response.status_code == 400
+
+
+def test_steer_with_no_body_is_400_not_500(client: TestClient, tmp_path: Path) -> None:
+    created = client.post("/api/projects", json={"name": "demo", "root": str(tmp_path / "demo")})
+    project_id = created.json()["id"]
+
+    response = client.post(f"/api/projects/{project_id}/steer", content=b"")
+    assert response.status_code == 400
+
+
+def test_steer_with_malformed_json_is_400_not_500(client: TestClient, tmp_path: Path) -> None:
+    created = client.post("/api/projects", json={"name": "demo", "root": str(tmp_path / "demo")})
+    project_id = created.json()["id"]
+
+    response = client.post(f"/api/projects/{project_id}/steer", content=b"not json at all")
+    assert response.status_code == 400
+
+
+def test_update_roles_with_no_body_is_400_not_500(client: TestClient, tmp_path: Path) -> None:
+    created = client.post("/api/projects", json={"name": "demo", "root": str(tmp_path / "demo")})
+    project_id = created.json()["id"]
+
+    response = client.patch(f"/api/projects/{project_id}/roles", content=b"")
+    assert response.status_code == 400
+
+
+def test_update_allow_with_no_body_is_400_not_500(client: TestClient, tmp_path: Path) -> None:
+    created = client.post("/api/projects", json={"name": "demo", "root": str(tmp_path / "demo")})
+    project_id = created.json()["id"]
+
+    response = client.patch(f"/api/projects/{project_id}/allow", content=b"")
+    assert response.status_code == 400

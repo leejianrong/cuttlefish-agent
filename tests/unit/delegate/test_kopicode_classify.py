@@ -78,6 +78,26 @@ def test_a_nonzero_exit_with_no_denial_is_failed() -> None:
     assert outcome.reason == "exit_code=4 reason=max_turns"
 
 
+def test_a_failed_session_folds_in_a_stderr_tail() -> None:
+    # e.g. a provider's own 401 only ever shows up on stderr, never in session_ended
+    # itself (docs/QUESTIONS.md Q54's sibling live finding) -- classify_stream just
+    # threads an already-redacted string through; classify_kopicode_output owns the
+    # redaction itself (test_kopicode_stderr_redaction.py).
+    outcome = classify_stream(
+        [{"kind": "session_ended", "reason": "error", "exit_code": 3}],
+        stderr_tail="401 Unauthorized: API key expired",
+    )
+    assert outcome.kind == "failed"
+    assert outcome.reason == ("exit_code=3 reason=error; stderr: 401 Unauthorized: API key expired")
+
+
+def test_a_failed_session_with_no_stderr_omits_the_stderr_clause() -> None:
+    outcome = classify_stream(
+        [{"kind": "session_ended", "reason": "error", "exit_code": 3}], stderr_tail=""
+    )
+    assert outcome.reason == "exit_code=3 reason=error"
+
+
 def test_a_stream_with_no_session_ended_raises() -> None:
     with pytest.raises(DelegationError):
         classify_stream([{"kind": "user_message", "text": "hi"}])
