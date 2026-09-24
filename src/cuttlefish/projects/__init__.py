@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from cuttlefish.projects.store import (
+    PersistedRole,
     Project,
     ProjectNotFoundError,
     ProjectStore,
@@ -11,6 +12,7 @@ from cuttlefish.projects.store import (
 )
 
 __all__ = [
+    "PersistedRole",
     "Project",
     "ProjectNotFoundError",
     "ProjectStore",

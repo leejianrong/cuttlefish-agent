@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cuttlefish.projects.store import Project, ProjectNotFoundError, ProjectStore, RoleDefinition
+from cuttlefish.projects.store import (
+    PersistedRole,
+    Project,
+    ProjectNotFoundError,
+    ProjectStore,
+    RoleDefinition,
+)
 
 
 def _store(tmp_path: Path) -> ProjectStore:
@@ -115,6 +121,57 @@ def test_record_team_started_sets_last_team_id(tmp_path: Path) -> None:
     project = store.register(name="demo", root=str(tmp_path / "demo"))
     store.record_team_started(project.id, "team-123")
     assert store.get(project.id).last_team_id == "team-123"
+    assert store.get(project.id).last_team_roles == ()
+    store.close()
+
+
+def test_record_team_started_round_trips_persisted_roles(tmp_path: Path) -> None:
+    """ADR-0010/KAN-1703: a daemon restart resuming `last_team_id` needs the
+    identical `TeamInput` that run started with back out of the registry, not
+    just its id."""
+    store = _store(tmp_path)
+    project = store.register(name="demo", root=str(tmp_path / "demo"))
+    roles = (
+        PersistedRole(name="builder", text="You are builder. ships fast\n\nadd a test"),
+        PersistedRole(name="reviewer", text="look", allow=(("go", "test"),)),
+    )
+    store.record_team_started(project.id, "team-123", roles)
+    assert store.get(project.id).last_team_roles == roles
+    store.close()
+
+
+def test_record_team_started_replaces_the_previous_persisted_roles(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    project = store.register(name="demo", root=str(tmp_path / "demo"))
+    store.record_team_started(project.id, "team-1", (PersistedRole(name="builder", text="v1"),))
+    store.record_team_started(project.id, "team-2", (PersistedRole(name="builder", text="v2"),))
+    assert store.get(project.id).last_team_roles == (PersistedRole(name="builder", text="v2"),)
+    store.close()
+
+
+def test_a_projects_db_predating_last_team_roles_is_migrated_in_place(tmp_path: Path) -> None:
+    """`last_team_roles_json` was added for KAN-1703, after `allow_json` -- an
+    operator's existing, on-disk `projects.db` may predate either or both."""
+    import sqlite3
+
+    db_path = tmp_path / "projects.db"
+    legacy = sqlite3.connect(db_path)
+    legacy.execute(
+        "CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, root TEXT NOT NULL, "
+        "secrets_scope TEXT NOT NULL, roles_json TEXT NOT NULL, last_team_id TEXT, "
+        "allow_json TEXT NOT NULL DEFAULT '[]')"
+    )
+    legacy.execute(
+        "INSERT INTO projects (id, name, root, secrets_scope, roles_json, last_team_id) "
+        "VALUES ('p1', 'demo', '/tmp/demo', 'demo', '[]', 'old-team')"
+    )
+    legacy.commit()
+    legacy.close()
+
+    store = ProjectStore.open(db_path)
+    project = store.get("p1")
+    assert project.last_team_id == "old-team"
+    assert project.last_team_roles == ()
     store.close()
 
 
